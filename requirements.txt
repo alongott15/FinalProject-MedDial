@@ -1,0 +1,14 @@
+transformers>=4.30.0
+torch>=2.0.0
+pydantic>=1.10.2
+scikit-learn>=1.2.0
+sentence-transformers>=2.2.0  # For STS evaluation
+azure-ai-inference  # For Azure AI Foundry / GPT-4.1 inference
+python-dotenv
+nltk
+rouge-score
+pandas>=1.5.0  # For CSV data loading
+
+# --- Evaluation framework ---
+deepeval>=0.21.0          # GEval metrics and DeepEvalBaseLLM adapter
+azure-core>=1.30.0        # Required by azure-ai-inference

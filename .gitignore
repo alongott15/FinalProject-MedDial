@@ -1,0 +1,14 @@
+/.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+/.vscode
+Agents/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.deepeval
+.vscode
+.Agents\__pycache__
