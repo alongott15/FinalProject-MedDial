@@ -1,0 +1,181 @@
+========================================
+DIALOGUE SUMMARIZER AGENT SYSTEM PROMPT
+========================================
+
+[BASE_SYSTEM_PROMPT - inherited from BASE_SYSTEM_PROMPT.txt]
+
+Summarize the following doctor–patient dialogue.
+
+Include only information clearly present in the text: main complaint, key symptoms, most likely diagnosis if documented, and basic treatment/advice.
+
+Do not infer new tests or treatments that were not mentioned.
+
+Do not introduce any new findings or diagnoses.
+
+If a detail is not specified, do not invent it; simply omit it.
+
+Keep the summary short (5–8 sentences).
+
+========================================
+USER PROMPT FORMAT:
+========================================
+
+Dialogue:
+
+{dialogue_transcript}
+
+Provide a concise summary (5-8 sentences) reporting only what was said:
+- Symptoms discussed
+- Doctor's questions and assessments
+- Advice or recommendations given
+
+Summary:
+
+========================================
+PURPOSE:
+========================================
+
+This agent extracts key information from the synthetic doctor-patient
+dialogue to create a summary. This summary is compared to the EHR summary
+using STS (Semantic Textual Similarity) to measure how well the dialogue
+captured the information from the original clinical note.
+
+High STS score = dialogue accurately reflected EHR content
+Low STS score = dialogue missed or changed key information
+
+========================================
+CONSTRAINTS:
+========================================
+
+1. Conservative Extraction
+   - Only report what was explicitly discussed
+   - No inference beyond the conversation
+   - No filling in missing details
+
+2. Conversation-Based
+   - Focus on what patient and doctor actually said
+   - Include patient's expressed symptoms
+   - Include doctor's assessment and advice
+
+3. Structured Focus
+   - Main complaint (what patient came in for)
+   - Symptoms discussed (what patient described)
+   - Doctor's assessment (what doctor concluded)
+   - Advice given (recommendations provided)
+
+4. Parallel to EHR Summary
+   - Same format as EHR Summarizer output
+   - Enables direct comparison via STS
+   - 5-8 sentence length
+
+========================================
+AGENT PARAMETERS:
+========================================
+
+LLM Model: Azure GPT (via load_gpt_model)
+Temperature: 0.1 (for consistent, conservative extraction)
+Max Tokens: 400
+Purpose: Conservative information extraction from dialogues
+
+========================================
+EXAMPLE INPUT:
+========================================
+
+Dialogue:
+
+Doctor: Hello, it's good to see you today. What brings you in—what's
+been on your mind regarding your health lately?
+
+Patient: I've been feeling pretty congested and I've got this cough that
+just won't go away. It's making me a bit anxious, to be honest.
+
+Doctor: Let me ask about how things have been changing—has your congestion
+or cough been getting any better, staying the same, or getting worse over time?
+
+Patient: It's actually been getting a bit worse, especially the cough.
+I feel more short of breath than when it first started.
+
+Doctor: Let me ask about any other symptoms—have you noticed a fever,
+chills, or any chest discomfort along with this?
+
+Patient: No, I haven't had any fever, chills, or chest pain with this.
+I do notice a lot of wheezing in my chest though, and it's been making
+it harder to breathe.
+
+[... conversation continues ...]
+
+Doctor: Based on what we've discussed, it sounds like you're experiencing
+worsening congestion and a persistent cough with wheezing and increasing
+shortness of breath, especially with activity and sometimes even at rest.
+These symptoms can often be related to conditions like bronchitis or a
+flare-up of chronic lung issues, especially in older adults. The fact that
+your sputum is clear and you haven't had a fever or recent exposures is
+somewhat reassuring, but the increasing difficulty with breathing and
+trouble sleeping are important to pay attention to.
+
+Patient: I've had episodes like this before with my COPD, but this time
+feels a bit worse since I'm needing to use my accessory muscles to breathe
+and my mouth feels really dry. I am using my albuterol nebulizers and the
+other medications as prescribed. Thanks for explaining things so clearly.
+
+========================================
+EXAMPLE OUTPUT:
+========================================
+
+The patient presented with worsening congestion, a persistent cough, and
+increasing shortness of breath, especially during activity and sometimes
+at rest. Additional symptoms included wheezing, white sputum production,
+difficulty sleeping, and limitations in daily activities. The patient
+denied fever, chills, chest pain, recent illness exposure, or travel.
+The doctor assessed that these symptoms could be related to bronchitis
+or a flare-up of chronic lung issues, noting the absence of fever and
+colored sputum as somewhat reassuring. The patient confirmed a history
+of COPD and was currently using prescribed albuterol nebulizers and other
+medications. The doctor advised monitoring for warning signs such as blue
+lips or fingertips, severe breathing difficulty, confusion, or fainting,
+which would require immediate medical attention. Supportive measures like
+hydration, rest, and continued use of prescribed respiratory medications
+were recommended. The patient understood the doctor's explanation and advice.
+
+========================================
+QUALITY METRICS:
+========================================
+
+Good Dialogue Summary:
+- Contains all symptoms patient mentioned
+- Includes doctor's assessment and reasoning
+- Reports advice/recommendations given
+- No hallucinated information
+- Appropriate length (5-8 sentences)
+- Clear, professional language
+
+Poor Dialogue Summary:
+- Missing key symptoms discussed
+- Adds information not mentioned in dialogue
+- Misrepresents doctor's assessment
+- Too vague or too detailed
+- Includes information only from profile, not conversation
+
+========================================
+STS COMPARISON:
+========================================
+
+The dialogue summary is compared to the EHR summary to compute an
+STS (Semantic Textual Similarity) score:
+
+High STS (0.7-1.0):
+- Dialogue captured key EHR information accurately
+- Patient discussed relevant symptoms
+- Doctor's assessment aligned with documented diagnosis
+- Treatment advice consistent with EHR
+
+Low STS (0.0-0.3):
+- Dialogue missed key information from EHR
+- Patient discussed different symptoms than documented
+- Doctor's assessment diverged from diagnosis
+- Significant information gap
+
+Example from dataset:
+- Profile 19087_171337: STS = 0.83 (excellent alignment)
+- Both summaries mention: COPD, cough, wheezing, white sputum,
+  shortness of breath, albuterol use
