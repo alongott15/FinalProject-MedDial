@@ -1,0 +1,13 @@
+{
+  "name": "cmpb-full-meddial",
+  "variant": "full_meddial",
+  "seed": 42,
+  "max_attempts": 3,
+  "max_turns": 30,
+  "acceptance_thresholds": {
+    "naturalness": 0.6,
+    "role_aware_clinical_faithfulness": 0.7,
+    "knowledge_boundary": 1.0,
+    "structural_validity": 1.0
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "name": "cmpb-basic-multi-agent",
+  "variant": "basic_multi_agent",
+  "seed": 42,
+  "max_attempts": 3,
+  "max_turns": 30
+}

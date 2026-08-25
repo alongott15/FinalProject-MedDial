@@ -3,6 +3,13 @@ import pandas as pd
 from pathlib import Path
 from Utils.markdown_gtmf import save_gtmf_markdown
 import os
+from meddial.cohort import (
+    classify_lower_acuity_candidate,
+    create_cohort_manifest,
+    deterministic_sample,
+    load_manifest_selection,
+    save_cohort_manifest,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -47,7 +54,8 @@ class CSVDataLoader:
         if text_filter:
             notes = notes[notes['TEXT'].str.contains(text_filter, case=False, na=False)]
 
-        notes = notes.head(limit)
+        # Stable ordering makes the candidate pool reproducible across pandas versions.
+        notes = notes.sort_values(["SUBJECT_ID", "HADM_ID", "ROW_ID"], kind="stable").head(limit)
 
         results = []
         for _, note_row in notes.iterrows():
@@ -114,9 +122,14 @@ class CSVDataLoader:
         category_filter: str = "Discharge summary",
         limit: int = 100,
         light_case_include_terms: list[str] = None,
-        light_case_exclude_terms: list[str] = None
+        light_case_exclude_terms: list[str] = None,
+        seed: int = 42,
+        manifest_path: str | None = None,
+        reuse_manifest: bool = False,
     ) -> list[dict]:
-        from gtmf_creation import is_light_common_case
+        # Term arguments are retained for source compatibility. The versioned,
+        # audited policy in meddial.cohort is authoritative.
+        del light_case_include_terms, light_case_exclude_terms
 
         all_notes = self.fetch_notes(
             category_filter=category_filter,
@@ -125,22 +138,28 @@ class CSVDataLoader:
         )
 
         light_case_notes = []
-        other_notes = []
 
         for note in all_notes:
-            filter_result = is_light_common_case(note['text'])
+            filter_result = classify_lower_acuity_candidate(note['text']).to_dict()
             note['light_case_filter'] = filter_result
             if filter_result['passed']:
                 light_case_notes.append(note)
-            else:
-                other_notes.append(note)
 
-        combined_notes = light_case_notes + other_notes
+        if manifest_path and reuse_manifest and Path(manifest_path).exists():
+            selected = load_manifest_selection(manifest_path, light_case_notes)
+        else:
+            selected = deterministic_sample(light_case_notes, limit=limit, seed=seed)
+            if manifest_path:
+                manifest = create_cohort_manifest(
+                    selected, seed=seed, source=str(self.csv_dir)
+                )
+                save_cohort_manifest(manifest_path, manifest)
 
-        if len(combined_notes) < limit:
-            logger.warning(f"Only {len(combined_notes)} notes available, requested {limit}")
+        if len(selected) < limit:
+            logger.warning(f"Only {len(selected)} eligible notes available, requested {limit}")
 
-        return combined_notes[:limit]
+        # This method now returns eligible notes only; rejected notes are never appended.
+        return selected
 
 
 def csv_to_gtmf_workflow(csv_dir: str, output_path: str, limit: int = 50):

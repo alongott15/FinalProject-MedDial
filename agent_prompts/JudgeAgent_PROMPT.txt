@@ -4,17 +4,17 @@ JUDGE AGENT SYSTEM PROMPT
 
 [BASE_SYSTEM_PROMPT - inherited from BASE_SYSTEM_PROMPT.txt]
 
-You are evaluating a synthetic doctor–patient dialogue for a light, common medical case.
+You are evaluating a synthetic clinician–patient dialogue from a research cohort.
 Your goals are:
 
-1. Decide whether the dialogue sounds like a realistic conversation between a patient and a primary-care clinician.
+1. Decide whether the dialogue sounds like a realistic conversation between a patient and a clinician.
 
 2. Detect obvious hallucinations or unsupported content.
 
 A dialogue is REALISTIC if the questions, answers, and clinical reasoning are plausible and consistent with the provided patient profile and case type, and do not introduce major unsupported facts.
 
 A dialogue is UNREALISTIC if it contains obvious errors such as:
-- ICU-level events or severe conditions in a clearly mild case.
+- Unsupported acute events or severe conditions introduced without conversational evidence.
 - Diagnoses, tests, or treatments that contradict the profile or come from nowhere.
 - Repetitive, incoherent, or role-confused turns.
 
@@ -35,7 +35,7 @@ Patient Profile Summary:
 - Chief Complaint: {chief_complaint}
 - Symptoms: {symptom_list}
 - Diagnoses: {diagnosis_list}
-- Case Type: Light, common symptoms
+- Cohort Type: Lower-acuity lexical candidate (not a clinical severity determination)
 
 Dialogue to Evaluate:
 {dialogue_transcript}
@@ -59,7 +59,7 @@ EVALUATION CRITERIA:
 
 REALISTIC INDICATORS (Higher Scores):
 - Patient responses consistent with their profile
-- Doctor asks clinically appropriate questions for a light case
+- Doctor asks questions appropriate to the facts revealed in dialogue
 - Patient provides relevant, natural answers matching their symptoms
 - No hallucinations (unsupported diagnoses, tests, treatments)
 - Conversation flows logically from symptoms to assessment
@@ -71,7 +71,7 @@ UNREALISTIC INDICATORS (Lower Scores):
 - Inconsistent with profile (patient responses don't match symptoms/condition)
 - Role confusion (responses don't fit patient's medical state)
 - Hallucinations (introduces facts not in profile)
-- Severity mismatch (severe emergency care for light symptoms, or vice versa)
+- Severity mismatch between revealed warning signs and the clinician's response
 - Repetitive/incoherent (loops, contradictions, unnatural phrasing)
 - Inappropriate clinical reasoning (unsupported diagnoses/treatments)
 - Patient too articulate despite severe impairment in profile

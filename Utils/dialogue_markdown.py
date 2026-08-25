@@ -28,11 +28,11 @@ def dialogue_to_markdown(dialogue_result: dict) -> str:
             attempt_num = attempt.get('attempt', 0)
             success = attempt.get('success', False)
             decision = attempt.get('decision', 'N/A')
-            score = attempt.get('score', 0.0)
+            score = attempt.get('score')
             lines.append(f"### Attempt {attempt_num}")
             lines.append(f"- Success: {success}")
             lines.append(f"- Decision: {decision}")
-            lines.append(f"- Score: {score:.3f}")
+            lines.append(f"- Score: {score:.3f}" if score is not None else "- Score: UNSCORABLE")
             lines.append("")
 
     judge_eval = dialogue_result.get('judge_evaluation', {})
@@ -42,18 +42,25 @@ def dialogue_to_markdown(dialogue_result: dict) -> str:
         lines.append(f"- **Score**: {judge_eval.get('score', 0.0):.3f}")
         lines.append(f"- **Justification**: {judge_eval.get('justification', 'N/A')}\n")
 
-        # DeepEval sub-score breakdown
+        # Role-aware evaluation sub-score breakdown
         deepeval = dialogue_result.get('deepeval_scores') or judge_eval.get('deepeval_scores', {})
         if deepeval:
-            lines.append("### DeepEval Sub-Scores\n")
+            lines.append("### Evaluation Dimensions\n")
             lines.append(f"| Metric | Score |")
             lines.append(f"|---|---|")
             if deepeval.get('naturalness') is not None:
                 lines.append(f"| Naturalness | {deepeval['naturalness']:.3f} |")
             if deepeval.get('profile_compliance') is not None:
                 lines.append(f"| Profile Compliance ({deepeval.get('profile_type', 'N/A')}) | {deepeval['profile_compliance']:.3f} |")
-            if deepeval.get('ragas_faithfulness') is not None:
-                lines.append(f"| RAGAS Faithfulness | {deepeval['ragas_faithfulness']:.3f} |")
+            faithfulness = deepeval.get('role_aware_clinical_faithfulness')
+            if faithfulness is None:
+                faithfulness = deepeval.get('claim_faithfulness')
+            if faithfulness is not None:
+                lines.append(f"| Role-Aware Clinical Faithfulness | {faithfulness:.3f} |")
+            if deepeval.get('knowledge_boundary') is not None:
+                lines.append(f"| Knowledge Boundary | {deepeval['knowledge_boundary']:.3f} |")
+            if deepeval.get('structural_validity') is not None:
+                lines.append(f"| Structural Validity | {deepeval['structural_validity']:.3f} |")
             lines.append("")
 
         feedback = judge_eval.get('feedback_for_improvement', {})

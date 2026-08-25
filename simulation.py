@@ -140,7 +140,7 @@ def simulate_dialogue(doctor_agent, patient_agent, max_turns=30, consecutive_con
       continues until the patient explicitly has no more questions
     - max_turns is a safety limit (30), not a target
 
-    Quality assessment is handled entirely by CoachAgent.
+    Quality assessment is performed after simulation by the configured validators.
     """
     conversation_history = []
     transcript_log = []

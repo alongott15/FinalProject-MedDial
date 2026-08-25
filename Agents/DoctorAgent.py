@@ -4,13 +4,35 @@ from Utils.llms_utils import load_gpt_model, chat_generate
 from Utils.bias_aware_prompts import BASE_SYSTEM_PROMPT, PATIENT_PROFILE_TYPE_KNOWLEDGE
 from Utils.conversation_variety import should_doctor_summarize, should_doctor_explain_reasoning, get_symptom_follow_up_question, DOCTOR_CLINICAL_REASONING, DOCTOR_EDUCATIONAL_PHRASES, create_varied_prompt_examples
 from Utils.repetition_filter import RepetitionTracker, detect_symptom_repetition
+from meddial.knowledge import DoctorContext, build_doctor_context
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class DoctorAgent:
-    def __init__(self, patient_profile: dict = None):
-        self.llm = load_gpt_model(temperature=0.5, max_tokens=300)  # Increased for more natural variation
+    def __init__(
+        self,
+        patient_profile: dict = None,
+        llm=None,
+        doctor_context: DoctorContext | dict | None = None,
+    ):
+        """Create a doctor with an explicitly restricted initial context.
+
+        ``patient_profile`` is retained for compatibility, but it is always
+        reduced to a doctor context before prompt construction.  Supplying an
+        injected ``llm`` makes the agent provider-independent and testable.
+        """
+        self.llm = llm or load_gpt_model(temperature=0.5, max_tokens=300)
+        source = doctor_context if doctor_context is not None else patient_profile
+        if isinstance(source, DoctorContext):
+            patient_profile = source.as_dict()
+        elif isinstance(source, dict) and source.get("knowledge_scope") == "doctor_initial_context":
+            patient_profile = source
+        elif isinstance(source, dict):
+            profile_type = source.get("profile_type", "NO_DIAGNOSIS_NO_TREATMENT")
+            patient_profile = build_doctor_context(source, profile_type).as_dict()
+        else:
+            patient_profile = {}
         self.patient_profile = patient_profile
         self.coach_feedback_to_incorporate = None
         self.conversation_phase = "opening"
@@ -34,23 +56,10 @@ class DoctorAgent:
                     f"Sex: {demo.get('Sex', 'Not provided')}"
                 )
 
-            # Check what data is available
-            if patient_profile.get("Core_Fields", {}).get("Symptoms"):
-                available_data_summary.append("symptoms reported in profile")
-            if patient_profile.get("Context_Fields", {}).get("Medical_History"):
-                available_data_summary.append("medical history")
-            if patient_profile.get("Context_Fields", {}).get("Allergies"):
-                available_data_summary.append("allergy information")
+            available_data_summary.append("demographics only before conversation")
 
-        # Extract key symptoms for guidance
+        # Clinical facts are learned from conversation, never from the SCR.
         self.key_symptoms = []
-        if patient_profile:
-            symptoms = patient_profile.get("Core_Fields", {}).get("Symptoms", [])
-            for symptom in symptoms:
-                if isinstance(symptom, dict):
-                    desc = symptom.get("description", "").strip()
-                    if desc:
-                        self.key_symptoms.append(desc.lower())
 
         data_available = ", ".join(available_data_summary) if available_data_summary else "limited patient data"
 
@@ -68,13 +77,13 @@ class DoctorAgent:
                 f"{BASE_SYSTEM_PROMPT}\n\n"
 
                 "**YOUR ROLE:**\n"
-                f"You are a primary care physician conducting a consultation for a patient with a light, common medical issue.\n"
+                f"You are a clinician conducting a simulated consultation from a research cohort.\n"
                 f"Patient demographics: {demographics_info}\n"
                 f"Available patient data: {data_available}\n\n"
 
                 f"{profile_type_guidance}\n\n"
 
-                "**CONSULTATION APPROACH FOR LIGHT CASES:**\n"
+                "**CONSULTATION APPROACH:**\n"
                 "1. Start with a warm greeting and open-ended question (e.g., 'How have you been feeling lately?')\n"
                 "2. Listen to patient's chief complaint and explore key symptoms with focused follow-up questions\n"
                 "3. PRIORITIZE the most important questions - quality over quantity\n"
@@ -82,7 +91,7 @@ class DoctorAgent:
                 "5. Show empathy naturally and contextually (not every turn)\n"
                 "6. Provide education and clinical reasoning - explain WHY you're asking certain questions\n"
                 "7. Occasionally summarize what you've heard to show active listening\n"
-                "8. Keep questions appropriate for a light, common condition (not severe/ICU-level)\n\n"
+                "8. Calibrate urgency to facts revealed in the conversation; the cohort label is not a diagnosis\n\n"
 
                 "**COMMUNICATION GUIDELINES - NATURAL CONVERSATION:**\n"
                 "- Vary your response style - don't start every response with 'Thank you' or 'I understand'\n"
@@ -97,7 +106,7 @@ class DoctorAgent:
                 "**PROVIDE CLINICAL VALUE:**\n"
                 "- Explain likely mechanisms or causes in simple terms when appropriate\n"
                 "- Educate about warning signs to watch for\n"
-                "- Offer reassurance when findings suggest common, benign issues\n"
+                "- Offer reassurance only when the conversation supports it\n"
                 "- Provide practical self-care advice beyond just 'see your doctor'\n"
                 "- Help patient understand connections between symptoms\n\n"
 
@@ -111,8 +120,8 @@ class DoctorAgent:
                 "- Base your questions and assessment ONLY on what the patient tells you in the conversation\n"
                 "- Do not assume or invent symptoms, test results, or history not mentioned\n"
                 "- If you're unsure about something, ask the patient directly\n"
-                "- Do not escalate a light case to severe diagnoses without strong evidence from conversation\n"
-                "- Stay focused on light, common conditions (cough, sore throat, headache, mild fever, etc.)\n"
+                "- Do not infer facts from the hidden clinical reference or cohort-selection process\n"
+                "- Treat urgent warning signs seriously if the patient actually reveals them\n"
             )
         }
 
