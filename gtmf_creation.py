@@ -1,64 +1,34 @@
 import json
 import logging
-from azure.ai.inference import ChatCompletionsClient
-from azure.ai.inference.models import SystemMessage, UserMessage
-from azure.core.credentials import AzureKeyCredential
-from Models.classes import GTMF
+import copy
+from typing import Any, Mapping
+from Models.classes import EvidenceProvenance, GTMF, SCR
 from Utils.utils import format_date, calculate_age
 from Utils.bias_aware_prompts import GTMF_CREATION_PROMPT
 from Utils.markdown_gtmf import save_gtmf_markdown
 import re
 import os
+from meddial.cohort import (
+    EXCLUDE_PATTERNS,
+    INCLUDE_PATTERNS,
+    classify_lower_acuity_candidate,
+)
 
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-LIGHT_CASE_INCLUDE_TERMS = [
-    "cough", "sore throat", "throat pain", "runny nose", "nasal congestion",
-    "upper respiratory", "cold symptoms", "flu-like", "sneezing", "stuffy nose",
-    "post-nasal drip", "scratchy throat", "hoarse voice", "mild shortness of breath",
-    "headache", "mild dizziness", "sinus pressure", "sinus pain", "earache",
-    "ear pain", "pressure in head", "tension headache", "migraine",
-    "fever", "low-grade fever", "low grade fever", "mild fever", "chills", "malaise",
-    "fatigue", "tiredness", "weakness", "body aches", "muscle aches",
-    "nausea", "upset stomach", "mild abdominal pain", "diarrhea", "constipation",
-    "heartburn", "indigestion", "loss of appetite",
-    "back pain", "neck pain", "joint pain", "minor pain", "muscle soreness",
-    "stiffness", "sprain", "strain", "pain", "discomfort",
-    "mild swelling", "inflammation", "redness",
-    "rash", "skin irritation", "itching", "minor wound", "bruise",
-    "not feeling well", "under the weather", "viral illness", "viral infection",
-    "common cold", "seasonal allergies", "allergy symptoms"
-]
+LIGHT_CASE_INCLUDE_TERMS = list(INCLUDE_PATTERNS)
+LIGHT_CASE_EXCLUDE_TERMS = list(EXCLUDE_PATTERNS)
 
-LIGHT_CASE_EXCLUDE_TERMS = [
-    "icu", "intubated", "cardiac arrest", "shock", "sepsis", "septic",
-    "mechanical ventilation", "multi organ failure", "multiorgan failure",
-    "malignancy", "cancer", "metastatic", "critical", "life-threatening",
-    "severe", "acute respiratory distress", "ards", "transplant",
-    "dialysis", "cardiac surgery", "trauma", "hemorrhage", "stroke"
-]
+
+class ClinicalReferenceExtractionError(RuntimeError):
+    """The reference could not be extracted or validated; it is not an empty SCR."""
 
 
 def is_light_common_case(note_text: str, chief_complaint: str = "") -> dict:
-    text_lower = note_text.lower()
-    cc_lower = chief_complaint.lower() if chief_complaint else ""
-    combined_text = text_lower + " " + cc_lower
-
-    for term in LIGHT_CASE_EXCLUDE_TERMS:
-        if term in combined_text:
-            return {"passed": False, "reason": f"Contains severe/ICU indicator: '{term}'"}
-
-    matched_terms = []
-    for term in LIGHT_CASE_INCLUDE_TERMS:
-        if term in combined_text:
-            matched_terms.append(term)
-
-    if matched_terms:
-        return {"passed": True, "reason": f"Contains light symptoms: {', '.join(matched_terms)}"}
-    else:
-        return {"passed": False, "reason": "No light/common symptoms detected"}
+    """Compatibility wrapper for the versioned lower-acuity lexical filter."""
+    return classify_lower_acuity_candidate(note_text, chief_complaint).to_dict()
 
 def get_existing_gtmf_ids(output_dir: str = 'gtmf') -> set:
     """
@@ -106,13 +76,17 @@ def aggressive_json_clean(text: str) -> str:
 
 def safe_json_parse_object(json_str: str, field_name: str = "") -> dict:
     if not json_str or json_str.strip() in ['', '{}']:
-        return {}
+        raise ClinicalReferenceExtractionError(
+            f"{field_name or 'extraction'} returned empty JSON"
+        )
 
     try:
         result = json.loads(json_str)
         if isinstance(result, dict):
             return result
-        return {}
+        raise ClinicalReferenceExtractionError(
+            f"{field_name or 'extraction'} was JSON but not an object"
+        )
     except json.JSONDecodeError:
         try:
             cleaned = json_str.strip()
@@ -125,35 +99,13 @@ def safe_json_parse_object(json_str: str, field_name: str = "") -> dict:
             result = json.loads(cleaned)
             if isinstance(result, dict):
                 return result
-        except Exception:
-            pass
-
-        return {
-            "Core_Fields": {
-                "Symptoms": [],
-                "Diagnoses": [],
-                "Treatment_Options": []
-            },
-            "Context_Fields": {
-                "Patient_Demographics": {
-                    "Date_of_Birth": "not provided",
-                    "Age": 0,
-                    "Sex": "not provided",
-                    "Religion": "not provided",
-                    "Marital_Status": "not provided",
-                    "Ethnicity": "not provided",
-                    "Insurance": "not provided",
-                    "Admission_Type": "not provided",
-                    "Admission_Date": "not provided",
-                    "Discharge_Date": "not provided"
-                },
-                "Medical_History": {"Past_Medical_History": "not provided"},
-                "Allergies": [],
-                "Current_Medications": [],
-                "Discharge_Medications": []
-            },
-            "Additional_Context": {"Chief_Complaint": "not provided"}
-        }
+        except Exception as exc:
+            raise ClinicalReferenceExtractionError(
+                f"Could not parse {field_name or 'extraction'} JSON: {exc}"
+            ) from exc
+        raise ClinicalReferenceExtractionError(
+            f"Could not parse {field_name or 'extraction'} JSON"
+        )
 
 class AzureAIClient:
     def __init__(self, endpoint: str = None, api_key: str = None, model_name: str = "gpt-4.1"):
@@ -164,6 +116,11 @@ class AzureAIClient:
         if not self.endpoint or not self.api_key:
             raise ValueError("Azure AI endpoint and API key must be provided")
 
+        try:
+            from azure.ai.inference import ChatCompletionsClient
+            from azure.core.credentials import AzureKeyCredential
+        except ImportError as exc:
+            raise RuntimeError("Install MedDial with the 'azure' extra") from exc
         self.client = ChatCompletionsClient(
             endpoint=self.endpoint,
             credential=AzureKeyCredential(self.api_key)
@@ -171,6 +128,7 @@ class AzureAIClient:
 
     def chat_completion(self, system_message: str, user_message: str, temperature: float = 0.0) -> str:
         try:
+            from azure.ai.inference.models import SystemMessage, UserMessage
             response = self.client.complete(
                 messages=[
                     SystemMessage(content=system_message),
@@ -215,8 +173,56 @@ def chunk_medical_text(text: str, max_chunk_size: int = 3000, overlap: int = 200
 
     return chunks
 
-def extract_gtmf_chunked(medical_text: str, azure_client: AzureAIClient) -> GTMF:
-    schema_json = GTMF.model_json_schema()
+def _annotate_chunk_evidence(
+    extraction: dict[str, Any],
+    chunk: str,
+    chunk_index: int,
+    model: str,
+    source_note_id: str,
+    character_start: int | None,
+) -> dict[str, Any]:
+    """Attach source provenance to clinical entities extracted from one chunk."""
+    annotated = copy.deepcopy(extraction)
+    evidence = EvidenceProvenance(
+        source_note_id=source_note_id,
+        chunk_index=chunk_index,
+        character_start=character_start,
+        character_end=(character_start + len(chunk) if character_start is not None else None),
+        excerpt=chunk[:500],
+        extractor="llm_structured_extraction",
+        model=model,
+    ).model_dump()
+    core = annotated.setdefault("Core_Fields", {})
+    context = annotated.setdefault("Context_Fields", {})
+    for key in ("Symptoms", "Diagnoses", "Treatment_Options"):
+        for entity in core.setdefault(key, []):
+            if isinstance(entity, dict):
+                entity.setdefault("evidence", []).append(evidence)
+                for medication in entity.get("medications", []):
+                    if isinstance(medication, dict):
+                        medication.setdefault("evidence", []).append(evidence)
+    for key in ("Current_Medications", "Discharge_Medications"):
+        for entity in context.setdefault(key, []):
+            if isinstance(entity, dict):
+                entity.setdefault("evidence", []).append(evidence)
+    history = context.setdefault("Medical_History", {})
+    if isinstance(history, dict) and history.get("Past_Medical_History") not in (None, "", "not provided"):
+        history.setdefault("evidence", []).append(evidence)
+    additional = annotated.setdefault("Additional_Context", {})
+    if isinstance(additional, dict) and additional.get("Chief_Complaint") not in (None, "", "not provided"):
+        additional.setdefault("evidence", []).append(evidence)
+    annotated.setdefault("reference_evidence", []).append(evidence)
+    return annotated
+
+
+def extract_scr_chunked(
+    medical_text: str,
+    azure_client: AzureAIClient,
+    source_note_id: str = "current_note",
+) -> SCR:
+    if not medical_text or not medical_text.strip():
+        raise ClinicalReferenceExtractionError("Cannot extract an SCR from empty note text")
+    schema_json = SCR.model_json_schema()
     chunks = chunk_medical_text(medical_text, max_chunk_size=3000, overlap=200)
 
     system_message = GTMF_CREATION_PROMPT + """
@@ -227,6 +233,7 @@ def extract_gtmf_chunked(medical_text: str, azure_client: AzureAIClient) -> GTMF
     all_extractions = []
 
     for i, chunk in enumerate(chunks):
+        character_start = medical_text.find(chunk)
         user_message = f"""
         Extract medical information from this clinical note chunk and format it according to the JSON schema below.
 
@@ -265,87 +272,140 @@ def extract_gtmf_chunked(medical_text: str, azure_client: AzureAIClient) -> GTMF
                 data = safe_json_parse_object(json_str, f"chunk_{i+1}")
 
                 if data and data != {}:
-                    all_extractions.append(data)
+                    all_extractions.append(
+                        _annotate_chunk_evidence(
+                            data,
+                            chunk=chunk,
+                            chunk_index=i,
+                            model=getattr(azure_client, "model_name", "unknown"),
+                            source_note_id=source_note_id,
+                            character_start=character_start if character_start >= 0 else None,
+                        )
+                    )
 
         except Exception as e:
             logger.error(f"Error processing chunk {i+1}: {e}")
             continue
 
     if not all_extractions:
-        logger.error("No valid extractions obtained")
-        minimal_extraction = safe_json_parse_object("", "minimal_fallback")
-        all_extractions = [minimal_extraction]
+        raise ClinicalReferenceExtractionError(
+            f"No valid chunk extractions obtained from {len(chunks)} chunk(s)"
+        )
 
-    merged_extraction = merge_gtmf_extractions(all_extractions)
+    merged_extraction = merge_scr_extractions(all_extractions)
 
     try:
-        return GTMF(**merged_extraction)
+        return SCR(**merged_extraction)
     except Exception as e:
-        logger.error(f"Error in extract_gtmf_chunked: {e}")
-        raise
+        raise ClinicalReferenceExtractionError(f"Merged SCR validation failed: {e}") from e
 
-def merge_gtmf_extractions(extractions: list[dict]) -> dict:
-    if not extractions:
-        raise ValueError("No extractions to merge")
 
-    if len(extractions) == 1:
-        return extractions[0]
+_EMPTY_VALUES = (None, "", "not provided", "Not provided", 0)
 
-    merged = extractions[0].copy()
-    merged_symptoms = []
-    merged_diagnoses = []
-    merged_treatments = []
-    seen_symptoms = set()
-    seen_diagnoses = set()
-    seen_treatments = set()
 
-    for extraction in extractions:
-        core_fields = extraction.get("Core_Fields", {})
+def _normalized(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value).strip().lower())
 
-        for symptom in core_fields.get("Symptoms", []):
-            desc = symptom.get("description", "").strip().lower()
-            if desc and desc != "not provided" and desc not in seen_symptoms:
-                merged_symptoms.append(symptom)
-                seen_symptoms.add(desc)
 
-        for diagnosis in core_fields.get("Diagnoses", []):
-            primary = diagnosis.get("primary", "").strip().lower()
-            if primary and primary != "not provided" and primary not in seen_diagnoses:
-                merged_diagnoses.append(diagnosis)
-                seen_diagnoses.add(primary)
-
-        for treatment in core_fields.get("Treatment_Options", []):
-            procedure = treatment.get("procedure", "").strip().lower()
-            if procedure and procedure != "not provided" and procedure not in seen_treatments:
-                merged_treatments.append(treatment)
-                seen_treatments.add(procedure)
-
-    merged["Core_Fields"]["Symptoms"] = merged_symptoms
-    merged["Core_Fields"]["Diagnoses"] = merged_diagnoses
-    merged["Core_Fields"]["Treatment_Options"] = merged_treatments
-
-    for extraction in extractions[1:]:
-        context_fields = extraction.get("Context_Fields", {})
-
-        merged_allergies = merged.get("Context_Fields", {}).get("Allergies", [])
-        for allergy in context_fields.get("Allergies", []):
-            if allergy not in merged_allergies:
-                merged_allergies.append(allergy)
-        merged["Context_Fields"]["Allergies"] = merged_allergies
-
-        merged_current_meds = merged.get("Context_Fields", {}).get("Current_Medications", [])
-        for med in context_fields.get("Current_Medications", []):
-            if med not in merged_current_meds:
-                merged_current_meds.append(med)
-        merged["Context_Fields"]["Current_Medications"] = merged_current_meds
-
-        merged_discharge_meds = merged.get("Context_Fields", {}).get("Discharge_Medications", [])
-        for med in context_fields.get("Discharge_Medications", []):
-            if med not in merged_discharge_meds:
-                merged_discharge_meds.append(med)
-        merged["Context_Fields"]["Discharge_Medications"] = merged_discharge_meds
-
+def _merge_unique_scalars(values: list[Any]) -> list[Any]:
+    merged: list[Any] = []
+    seen: set[str] = set()
+    for value in values:
+        key = _normalized(value)
+        if key and key not in seen:
+            seen.add(key)
+            merged.append(copy.deepcopy(value))
     return merged
+
+
+def _entity_key(entity: Any, keys: tuple[str, ...]) -> str:
+    if not isinstance(entity, Mapping):
+        return _normalized(entity)
+    parts = [_normalized(entity.get(key, "")) for key in keys]
+    populated = [part for part in parts if part and part != "not provided"]
+    return "|".join(populated) or _normalized(json.dumps(entity, sort_keys=True, default=str))
+
+
+def _deep_merge(first: Any, second: Any) -> Any:
+    if first in _EMPTY_VALUES and second not in _EMPTY_VALUES:
+        return copy.deepcopy(second)
+    if isinstance(first, Mapping) and isinstance(second, Mapping):
+        merged = copy.deepcopy(dict(first))
+        for key, value in second.items():
+            merged[key] = _deep_merge(merged[key], value) if key in merged else copy.deepcopy(value)
+        return merged
+    if isinstance(first, list) and isinstance(second, list):
+        return _merge_unique_scalars(first + second)
+    return copy.deepcopy(first)
+
+
+def _merge_entity_lists(
+    lists: list[list[Any]], key_fields: tuple[str, ...]
+) -> list[Any]:
+    merged: dict[str, Any] = {}
+    order: list[str] = []
+    for entities in lists:
+        for entity in entities:
+            key = _entity_key(entity, key_fields)
+            if not key:
+                continue
+            if key not in merged:
+                merged[key] = copy.deepcopy(entity)
+                order.append(key)
+            else:
+                merged[key] = _deep_merge(merged[key], entity)
+    return [merged[key] for key in order]
+
+
+def merge_scr_extractions(extractions: list[dict]) -> dict:
+    """Merge every SCR field across chunks with entity-aware de-duplication."""
+    if not extractions:
+        raise ClinicalReferenceExtractionError("No SCR extractions to merge")
+    merged: dict[str, Any] = {}
+    for extraction in extractions:
+        merged = _deep_merge(merged, extraction)
+
+    core_sections = [item.get("Core_Fields", {}) for item in extractions]
+    context_sections = [item.get("Context_Fields", {}) for item in extractions]
+    merged_core = merged.setdefault("Core_Fields", {})
+    merged_context = merged.setdefault("Context_Fields", {})
+    merged_core["Symptoms"] = _merge_entity_lists(
+        [section.get("Symptoms", []) for section in core_sections], ("description",)
+    )
+    merged_core["Diagnoses"] = _merge_entity_lists(
+        [section.get("Diagnoses", []) for section in core_sections], ("primary",)
+    )
+    merged_core["Treatment_Options"] = _merge_entity_lists(
+        [section.get("Treatment_Options", []) for section in core_sections],
+        ("procedure", "treatment"),
+    )
+    merged_context["Allergies"] = _merge_unique_scalars(
+        [value for section in context_sections for value in section.get("Allergies", [])]
+    )
+    for key in ("Current_Medications", "Discharge_Medications"):
+        merged_context[key] = _merge_entity_lists(
+            [section.get(key, []) for section in context_sections], ("name",)
+        )
+    for key, fields in (
+        ("structured_diagnoses", ("icd9_code", "description")),
+        ("structured_procedures", ("icd9_code", "description")),
+        ("structured_prescriptions", ("drug", "dose_val_rx")),
+    ):
+        merged[key] = _merge_entity_lists(
+            [item.get(key, []) for item in extractions], fields
+        )
+    merged["reference_evidence"] = _merge_entity_lists(
+        [item.get("reference_evidence", []) for item in extractions],
+        ("source_note_id", "chunk_index", "extractor"),
+    )
+    merged["schema_name"] = "Structured Clinical Reference"
+    merged["extraction_status"] = "VALID"
+    return merged
+
+
+# Backward-compatible function names.
+extract_gtmf_chunked = extract_scr_chunked
+merge_gtmf_extractions = merge_scr_extractions
 
 def process_notes(results, azure_client: AzureAIClient, output_dir: str = 'gtmf'):
     os.makedirs(output_dir, exist_ok=True)
@@ -360,7 +420,8 @@ def process_notes(results, azure_client: AzureAIClient, output_dir: str = 'gtmf'
         "json_parse_failures": 0,
         "light_case_passed": 0,
         "light_case_failed": 0,
-        "gtmfs_created": 0
+        "gtmfs_created": 0,
+        "scr_extraction_failures": 0,
     }
 
     for idx, row in enumerate(results):
@@ -405,7 +466,11 @@ def process_notes(results, azure_client: AzureAIClient, output_dir: str = 'gtmf'
                 'Discharge_Date': dis_formatted
             }
 
-            gtmf_instance = extract_gtmf_chunked(row['text'], azure_client)
+            gtmf_instance = extract_scr_chunked(
+                row['text'],
+                azure_client,
+                source_note_id=f"{row['subject_id']}_{row['hadm_id']}",
+            )
             quality_summary["total_processed"] += 1
 
             gtmf_instance = gtmf_instance.model_copy(update={
@@ -419,7 +484,7 @@ def process_notes(results, azure_client: AzureAIClient, output_dir: str = 'gtmf'
 
             result = gtmf_instance.model_dump()
             result["light_case_filter"] = light_case_result
-            result["case_type"] = "LIGHT_COMMON_SYMPTOMS"
+            result["case_type"] = "LOWER_ACUITY_LEXICAL_CANDIDATE"
 
             subject_id = row['subject_id']
             hadm_id = row['hadm_id']
@@ -429,6 +494,10 @@ def process_notes(results, azure_client: AzureAIClient, output_dir: str = 'gtmf'
 
             quality_summary["gtmfs_created"] += 1
 
+        except ClinicalReferenceExtractionError as e:
+            logger.error(f"SCR extraction failed for note at index {idx}: {e}")
+            quality_summary["scr_extraction_failures"] += 1
+            quality_summary["total_processed"] += 1
         except json.JSONDecodeError as e:
             logger.error(f"JSON parsing failed for note at index {idx}: {e}")
             quality_summary["json_parse_failures"] += 1
@@ -460,13 +529,16 @@ def main():
         from Utils.csv_data_loader import CSVDataLoader
         loader = CSVDataLoader(csv_dir)
         # Fetch more notes to reach target after skipping existing (95 existing + ~205 new = 300 total)
-        # Using 800 to ensure we have enough after light case filtering and skip-existing logic
+        # Selection is deterministic and recorded in a manifest. The filter
+        # identifies lexical candidates; it does not establish primary-care severity.
         results = loader.fetch_notes_with_light_case_filter(
             category_filter="Discharge summary",
-            limit=10000000000000  # Increased to ensure we reach 300 total after filtering and skipping
+            limit=800,
+            seed=42,
+            manifest_path="gtmf/cohort_manifest.json",
         )
         if not results:
-            logger.error("No light case notes found")
+            logger.error("No eligible lower-acuity lexical candidates found")
             return
     except Exception as e:
         logger.error(f"Error loading CSV data: {e}")
@@ -480,12 +552,12 @@ def main():
         with open(summary_path, 'w', encoding='utf-8') as outfile:
             json.dump(summary, outfile, indent=2)
 
-        print(f"\n=== GTMF Processing Summary ===")
+        print(f"\n=== SCR Processing Summary ===")
         print(f"Total processed: {summary['total_processed']}")
         print(f"Skipped existing: {summary['skipped_existing']}")
-        print(f"GTMFs created (NEW): {summary['gtmfs_created']}")
-        print(f"Light cases passed: {summary['light_case_passed']}")
-        print(f"Light cases filtered: {summary['light_case_failed']}")
+        print(f"SCRs created (NEW): {summary['gtmfs_created']}")
+        print(f"Lexical candidates passed: {summary['light_case_passed']}")
+        print(f"Lexical candidates rejected: {summary['light_case_failed']}")
         print(f"JSON parse failures: {summary['json_parse_failures']}")
 
     except Exception as e:

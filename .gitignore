@@ -1,14 +1,49 @@
-/.env
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python environments and caches
+.venv/
+venv/
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-/.vscode
-Agents/__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.deepeval
-.vscode
-.Agents\__pycache__
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.deepeval/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# Editors and operating systems
+.DS_Store
+.vscode/
+.idea/
+
+# Protected/local datasets (do not commit MIMIC exports)
+data/
+MIMIC*/
+NOTEEVENTS.csv
+PATIENTS.csv
+ADMISSIONS.csv
+
+# Generated SCRs, cohort manifests, dialogue runs, and analysis artifacts
+gtmf/*.md
+gtmf/cohort_manifest.json
+output_dialogue_framework/
+**/runs/
+attempt_records/
+outcomes/
+per_profile_stats.json
+global_stats.json
+processing_summary.json
+*.jsonl
+
+# Local scratch output
+work/
+outputs/

@@ -79,11 +79,11 @@ Patient Improvements:
 - Ensure patient only mentions symptoms from their profile
 - Use more natural, hesitant language initially
 - Avoid inventing new medical information
-- Stay within light case severity bounds
+- Calibrate urgency only to facts revealed in the dialogue
 
 Doctor Improvements:
 - Start with warmer greeting and open-ended questions
-- Ask clinically appropriate questions for light cases
+- Ask clinically appropriate questions for the facts revealed in dialogue
 - Show empathy to patient concerns
 - Avoid escalating to ICU-level severity
 
@@ -221,7 +221,7 @@ KEY FEATURES:
 2. Safety Preservation
    - NEVER removes grounding rules
    - Maintains anti-hallucination constraints
-   - Preserves light case focus
+   - Preserves the configured cohort and knowledge-boundary policy
 
 3. Iterative Refinement
    - Used across multiple dialogue attempts

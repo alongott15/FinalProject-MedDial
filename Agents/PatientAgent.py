@@ -3,6 +3,7 @@ from Utils.llms_utils import load_gpt_model, chat_generate
 from Utils.bias_aware_prompts import BASE_SYSTEM_PROMPT, PATIENT_PROFILE_TYPE_KNOWLEDGE
 from Utils.conversation_variety import PatientPersonality, create_varied_prompt_examples
 from Utils.repetition_filter import RepetitionTracker
+from meddial.knowledge import mask_profile_for_patient
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -16,6 +17,8 @@ class PatientAgent:
             logger.info("LLM not provided to PatientAgent, loading Azure AI model internally.")
             self.llm = load_gpt_model(temperature=0.6, max_tokens=300)
 
+        profile_type = profile.get("profile_type", "NO_DIAGNOSIS_NO_TREATMENT")
+        profile = mask_profile_for_patient(profile, profile_type)
         self.profile = profile
         self.coach_feedback_to_incorporate = None
         self.mentioned_symptoms = set()

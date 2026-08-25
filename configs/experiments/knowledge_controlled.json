@@ -1,0 +1,7 @@
+{
+  "name": "cmpb-knowledge-controlled",
+  "variant": "knowledge_controlled",
+  "seed": 42,
+  "max_attempts": 3,
+  "max_turns": 30
+}

@@ -84,8 +84,10 @@ class JudgeAgent:
             # Parse response
             evaluation = self._parse_evaluation_response(response)
 
-            # Apply threshold to determine decision
-            if evaluation['score'] >= self.threshold:
+            # Only a fully parsed evaluation can reach the acceptance gate.
+            if evaluation.get('evaluation_status') != 'PASS':
+                evaluation['decision'] = evaluation.get('evaluation_status', 'UNSCORABLE')
+            elif evaluation['score'] >= self.threshold:
                 evaluation['decision'] = "REALISTIC"
             else:
                 evaluation['decision'] = "UNREALISTIC"
@@ -97,7 +99,8 @@ class JudgeAgent:
             logger.error(f"Error in JudgeAgent evaluation: {e}")
             # Return conservative default
             return {
-                "decision": "UNREALISTIC",
+                "decision": "ERROR",
+                "evaluation_status": "ERROR",
                 "score": 0.0,
                 "justification": f"Evaluation failed: {str(e)}",
                 "feedback_for_improvement": {
@@ -140,7 +143,7 @@ class JudgeAgent:
 - Chief Complaint: {chief_complaint}
 - Symptoms: {', '.join(symptom_list) if symptom_list else 'None specified'}
 - Diagnoses: {', '.join(diagnosis_list) if diagnosis_list else 'None specified'}
-- Case Type: Light, common symptoms"""
+- Cohort Type: Lexically selected research candidate (severity not established)"""
 
         return profile_text
 
@@ -192,6 +195,7 @@ class JudgeAgent:
 
                 return {
                     "decision": decision,
+                    "evaluation_status": "PASS",
                     "score": score,
                     "justification": justification,
                     "feedback_for_improvement": feedback
@@ -199,45 +203,20 @@ class JudgeAgent:
         except Exception as e:
             logger.warning(f"Failed to parse JSON from judge response: {e}")
 
-        # Fallback: heuristic parsing
-        score = 0.5
-        decision = "UNREALISTIC"
-        justification = response[:200]
-
-        # Try to extract score from text
-        score_patterns = [
-            r'score[:\s]*(\d+\.?\d*)',
-            r'(\d+\.?\d*)\s*/\s*1\.?0?',
-            r'rating[:\s]*(\d+\.?\d*)'
-        ]
-        for pattern in score_patterns:
-            match = re.search(pattern, response.lower())
-            if match:
-                try:
-                    score = float(match.group(1))
-                    if score > 1.0:  # Handle cases like "8/10"
-                        score = score / 10.0
-                    score = max(0.0, min(1.0, score))
-                    break
-                except:
-                    pass
-
-        # Determine decision from keywords
-        if any(word in response.lower() for word in ['realistic', 'natural', 'good', 'appropriate']):
-            if score >= 0.5:
-                decision = "REALISTIC"
-
+        # Invalid or non-JSON output is explicitly unscorable. Keyword and
+        # numeric heuristics are not sufficient for a publication pass gate.
         feedback = {
-            "patient_side": "See justification",
-            "doctor_side": "See justification",
-            "conversation_flow": "See justification",
-            "safety_or_clarity": "See justification"
+            "patient_side": "Unable to evaluate",
+            "doctor_side": "Unable to evaluate",
+            "conversation_flow": "Unable to evaluate",
+            "safety_or_clarity": "Unable to evaluate"
         }
 
         return {
-            "decision": decision,
-            "score": score,
-            "justification": justification,
+            "decision": "UNSCORABLE",
+            "evaluation_status": "UNSCORABLE",
+            "score": 0.0,
+            "justification": "Judge response could not be parsed as the required JSON schema",
             "feedback_for_improvement": feedback
         }
 

@@ -1,10 +1,12 @@
 import os
 import re
+import json
 from pathlib import Path
+from typing import Any
 from Models.classes import GTMF, Symptom, Diagnosis, Medication, TreatmentOption
 
 
-def gtmf_to_markdown(gtmf: GTMF | dict[str, any]) -> str:
+def gtmf_to_markdown(gtmf: GTMF | dict[str, Any]) -> str:
     if isinstance(gtmf, GTMF):
         gtmf_dict = gtmf.model_dump() if hasattr(gtmf, 'model_dump') else gtmf.dict()
     else:
@@ -13,7 +15,7 @@ def gtmf_to_markdown(gtmf: GTMF | dict[str, any]) -> str:
     lines = []
 
     # Title
-    lines.append("# Ground Truth Medical Form (GTMF)\n")
+    lines.append("# Structured Clinical Reference (SCR)\n")
 
     # Patient Information
     lines.append("## Patient Information\n")
@@ -234,10 +236,32 @@ def gtmf_to_markdown(gtmf: GTMF | dict[str, any]) -> str:
     if has_structured:
         lines.extend(structured_lines)
 
+    # Lossless machine-readable appendix preserves evidence provenance and
+    # additional structured fields while the human-readable sections remain
+    # backward compatible with historical GTMF artifacts.
+    lines.extend(
+        [
+            "<!-- MEDDIAL_SCR_JSON_START -->",
+            "```json",
+            json.dumps(gtmf_dict, indent=2, ensure_ascii=False),
+            "```",
+            "<!-- MEDDIAL_SCR_JSON_END -->",
+        ]
+    )
     return "\n".join(lines)
 
 
-def markdown_to_gtmf_dict(markdown_content: str) -> dict[str, any]:
+def markdown_to_gtmf_dict(markdown_content: str) -> dict[str, Any]:
+    machine_readable = re.search(
+        r"<!-- MEDDIAL_SCR_JSON_START -->\s*```json\s*(\{.*?\})\s*```\s*<!-- MEDDIAL_SCR_JSON_END -->",
+        markdown_content,
+        re.DOTALL,
+    )
+    if machine_readable:
+        parsed = json.loads(machine_readable.group(1))
+        if not isinstance(parsed, dict):
+            raise ValueError("Machine-readable SCR appendix must contain a JSON object")
+        return parsed
     gtmf = {
         'row_id': 0,
         'subject_id': 0,
@@ -504,7 +528,7 @@ def _parse_medication(line: str) -> dict[str, str]:
     return medication
 
 
-def _parse_icd_entry(line: str) -> dict[str, any]:
+def _parse_icd_entry(line: str) -> dict[str, Any]:
     match = re.match(r'\*\*(.+?)\*\*(?:\s*\(seq:\s*(\d+)\))?\s*:\s*(.+)', line)
     if match:
         entry = {
@@ -517,7 +541,7 @@ def _parse_icd_entry(line: str) -> dict[str, any]:
     return None
 
 
-def _parse_prescription(line: str) -> dict[str, any]:
+def _parse_prescription(line: str) -> dict[str, Any]:
     parts = line.split(maxsplit=1)
     if parts:
         return {
@@ -527,7 +551,7 @@ def _parse_prescription(line: str) -> dict[str, any]:
     return None
 
 
-def save_gtmf_markdown(gtmf: GTMF | dict[str, any], output_path: str) -> None:
+def save_gtmf_markdown(gtmf: GTMF | dict[str, Any], output_path: str) -> None:
     markdown_content = gtmf_to_markdown(gtmf)
 
     # Create directory if needed
@@ -537,14 +561,14 @@ def save_gtmf_markdown(gtmf: GTMF | dict[str, any], output_path: str) -> None:
         f.write(markdown_content)
 
 
-def load_gtmf_markdown(file_path: str) -> dict[str, any]:
+def load_gtmf_markdown(file_path: str) -> dict[str, Any]:
     with open(file_path, 'r', encoding='utf-8') as f:
         markdown_content = f.read()
 
     return markdown_to_gtmf_dict(markdown_content)
 
 
-def load_all_gtmfs_from_directory(directory: str) -> list[dict[str, any]]:
+def load_all_gtmfs_from_directory(directory: str) -> list[dict[str, Any]]:
     gtmfs = []
     path = Path(directory)
 
@@ -559,3 +583,11 @@ def load_all_gtmfs_from_directory(directory: str) -> list[dict[str, any]]:
             print(f"Error loading {md_file}: {e}")
 
     return gtmfs
+
+
+# Publication terminology with compatibility aliases retained above.
+scr_to_markdown = gtmf_to_markdown
+markdown_to_scr_dict = markdown_to_gtmf_dict
+save_scr_markdown = save_gtmf_markdown
+load_scr_markdown = load_gtmf_markdown
+load_all_scrs_from_directory = load_all_gtmfs_from_directory

@@ -1,5 +1,5 @@
 # Base system prompt used across all agents
-BASE_SYSTEM_PROMPT = """You are an AI assistant used in a research setting to simulate and analyze light medical cases.
+BASE_SYSTEM_PROMPT = """You are an AI assistant used in a research setting to simulate and analyze clinical dialogues.
 
 You must base all your outputs only on the information provided in the input context (EHR text, structured profile, or dialogue history).
 
@@ -18,21 +18,21 @@ Follow any additional task-specific instructions provided below."""
 # GTMF Creation Agent prompt
 GTMF_CREATION_PROMPT = BASE_SYSTEM_PROMPT + """
 
-Your task is to extract a structured Ground Truth Medical Form (GTMF) from the following clinical note and metadata for a light, common medical case.
+Your task is to extract a Structured Clinical Reference (SCR) from the following clinical note and metadata.
 
 Identify only symptoms, diagnoses, and treatments that are clearly supported by the text.
 
 If the diagnosis or treatment is not clearly documented, mark it as unknown or leave the field empty.
 
-Do not upgrade a mild/light case into a severe one, and do not add ICU-level events if they are not present.
+Do not infer severity or care setting from cohort membership. Preserve documented warning signs and do not add unsupported acute events.
 
-Output a JSON object following the GTMF schema provided."""
+Output a JSON object following the SCR schema provided."""
 
 # Patient Agent prompt addition (appends to existing patient persona)
 PATIENT_AGENT_ADDITION = """
 
 **CRITICAL GROUNDING INSTRUCTION:**
-You simulate a patient with a light, common medical issue.
+You simulate a patient represented by the supplied, policy-masked clinical context.
 
 You may express typical symptoms (such as cough, sore throat, fever, headache) only if they exist in the provided profile.
 
@@ -46,9 +46,9 @@ Keep answers relatively short and natural."""
 DOCTOR_AGENT_ADDITION = """
 
 **CRITICAL GROUNDING INSTRUCTION:**
-You simulate a primary-care physician talking to a patient with a light, common medical issue.
+You simulate a clinician talking to a patient from a lexically selected research cohort.
 
-Ask focused, clinically reasonable questions to clarify the patient's symptoms, but stay within the scope of a mild case.
+Ask focused, clinically reasonable questions to clarify the patient's symptoms and calibrate urgency to the dialogue.
 
 Base your reasoning only on the symptoms and context provided and the conversation so far.
 
@@ -61,17 +61,17 @@ Use simple, jargon-minimized language suitable for a layperson."""
 # Judge Agent prompt
 JUDGE_AGENT_PROMPT = BASE_SYSTEM_PROMPT + """
 
-You are evaluating a synthetic doctor–patient dialogue for a light, common medical case.
+You are evaluating a synthetic clinician–patient dialogue from a research cohort.
 Your goals are:
 
-1. Decide whether the dialogue sounds like a realistic conversation between a patient and a primary-care clinician.
+1. Decide whether the dialogue sounds like a realistic conversation between a patient and a clinician.
 
 2. Detect obvious hallucinations or unsupported content.
 
 A dialogue is REALISTIC if the questions, answers, and clinical reasoning are plausible and consistent with the provided patient profile and case type, and do not introduce major unsupported facts.
 
 A dialogue is UNREALISTIC if it contains obvious errors such as:
-- ICU-level events or severe conditions in a clearly mild case.
+- Unsupported acute events or severe conditions introduced without conversational evidence.
 - Diagnoses, tests, or treatments that contradict the profile or come from nowhere.
 - Repetitive, incoherent, or role-confused turns.
 
@@ -84,7 +84,7 @@ You must provide:
 # EHR Summarizer Agent prompt
 EHR_SUMMARIZER_PROMPT = BASE_SYSTEM_PROMPT + """
 
-Summarize the following clinical note for a light, common medical case.
+Summarize the following clinical note without inferring a care setting or severity category.
 
 CRITICAL FOCUS AREAS (include in this specific order when present):
 1. **Chief Complaint**: The primary reason for the visit (1 sentence)
@@ -147,6 +147,8 @@ PATIENT_PROFILE_TYPE_KNOWLEDGE = {
     "FULL": {
         "knows_diagnosis": True,
         "knows_treatment": True,
+        "knows_current_medications": True,
+        "knows_discharge_medications": True,
         "description": (
             "Patient has FULL knowledge of their medical situation: "
             "they know their symptoms, their formal diagnosis, and their complete treatment plan."
@@ -170,9 +172,11 @@ PATIENT_PROFILE_TYPE_KNOWLEDGE = {
     "NO_DIAGNOSIS": {
         "knows_diagnosis": False,
         "knows_treatment": True,
+        "knows_current_medications": True,
+        "knows_discharge_medications": True,
         "description": (
-            "Patient has PARTIAL knowledge: knows their symptoms and current medications, "
-            "but has NOT been told their formal diagnosis."
+            "Patient has PARTIAL knowledge: knows their symptoms, documented treatment "
+            "options and medications, but has NOT been told their formal diagnosis."
         ),
         "disclosure_rules": (
             "The patient must NOT say their formal diagnosis — they genuinely don't know it. "
@@ -183,10 +187,11 @@ PATIENT_PROFILE_TYPE_KNOWLEDGE = {
         ),
         "system_instruction": (
             "**WHAT YOU KNOW — NO DIAGNOSIS PROFILE:**\n"
-            "You know your symptoms and what medications you take, "
+            "You know your symptoms, documented treatment plan, and medications, "
             "but you have NOT been told your formal diagnosis:\n"
             "- You know all your symptoms (listed in your profile)\n"
             "- You know what medications you are currently taking (if any)\n"
+            "- You know the documented treatment plan and discharge medications (if any)\n"
             "- You do NOT know what the formal medical diagnosis is\n"
             "If the doctor asks 'do you know what is causing this?', say something like "
             "'Not exactly — I've been taking [medication] but I was never told the specific name of the condition.' "
@@ -196,13 +201,17 @@ PATIENT_PROFILE_TYPE_KNOWLEDGE = {
     "NO_DIAGNOSIS_NO_TREATMENT": {
         "knows_diagnosis": False,
         "knows_treatment": False,
+        "knows_current_medications": False,
+        "knows_discharge_medications": False,
         "description": (
             "Patient has SYMPTOM-ONLY knowledge: they are aware only of their symptoms. "
-            "They have no formal diagnosis and no treatment plan."
+            "They have no formal diagnosis, treatment plan, current-medication exposure, "
+            "or discharge-medication exposure in the simulation."
         ),
         "disclosure_rules": (
             "The patient must NOT mention any specific diagnosis — they don't have one. "
             "The patient must NOT mention any formal treatment plan — they haven't received one. "
+            "The patient must NOT mention current or discharge medications removed by this policy. "
             "If asked about diagnosis or treatment, they should say they came to find out. "
             "Only factual symptoms from the profile may be discussed."
         ),
@@ -212,6 +221,7 @@ PATIENT_PROFILE_TYPE_KNOWLEDGE = {
             "- You know all your symptoms (listed in your profile)\n"
             "- You do NOT have a formal diagnosis\n"
             "- You do NOT have a treatment plan for these symptoms\n"
+            "- You do NOT know current or discharge medications for this simulated episode\n"
             "- You came to the doctor because you noticed these symptoms and want to understand them\n"
             "If asked about a previous diagnosis or treatment for this condition, "
             "say you haven't been told anything yet and that's why you're here. "
