@@ -11,6 +11,7 @@ from meddial.experiments.records import (
     ResumeConfigurationMismatch,
     RunManager,
 )
+from meddial.experiments.study import PublicationStudyDesign, PublicationStudyRunner
 
 
 def test_ablation_variants_have_explicit_features():
@@ -58,10 +59,26 @@ def test_aggregation_includes_failures_and_static_binding_is_fixed():
             "attempt": 1,
             "accepted": False,
             "duration_seconds": 1,
+            "model_calls": [{"usage": {"input_tokens": 7, "output_tokens": 5}}],
             "evaluation": {
                 "composite_score": 0.5,
                 "evaluation_status": "FAIL",
-                "metrics": {},
+                "metrics": {
+                    "structural_validity": {"score": 1.0},
+                    "knowledge_boundary": {
+                        "score": 1.0,
+                        "details": {"leakage_event_count": 0, "leakage_rate": 0.0},
+                    },
+                    "independent_ensemble": {
+                        "details": {
+                            "dimensions": {
+                                "patient_factuality": 0.8,
+                                "doctor_factuality": 0.7,
+                                "clinical_plausibility": 0.9,
+                            }
+                        }
+                    },
+                },
             },
         }
     ]
@@ -72,3 +89,38 @@ def test_aggregation_includes_failures_and_static_binding_is_fixed():
     assert stats == instance_stats
     assert stats["failed_dialogues"] == 1
     assert stats["completed_records"] == 1
+    assert stats["first_attempt_success_rate"] == 0.0
+    assert stats["zero_leakage_rate"] == 1.0
+    assert stats["avg_doctor_factuality_score"] == 0.7
+    assert stats["total_model_calls"] == 1
+    assert stats["total_tokens"] == 12
+
+
+def test_recommended_study_separates_architecture_policy_and_recovery():
+    design = PublicationStudyDesign.recommended(
+        "private/cohort_manifest.json",
+        {"doctor": "generator", "patient": "generator"},
+    )
+    assert len(design.cells) == 13
+    architecture = [cell for cell in design.cells if cell.phase.value == "architecture_ablation"]
+    assert len(architecture) == 5
+    assert all(cell.config.max_attempts == 1 for cell in architecture)
+    recovery = [cell for cell in design.cells if cell.phase.value == "targeted_recovery"]
+    assert [cell.config.max_attempts for cell in recovery] == [1, 3]
+    assert design.primary_outcome == "all_mandatory_dimensions_pass_first_attempt"
+
+
+def test_study_runner_fails_before_mislabelling_missing_variants(tmp_path):
+    design = PublicationStudyDesign.recommended(
+        "private/cohort_manifest.json",
+        {"doctor": "generator", "patient": "generator"},
+    )
+
+    class IncompleteExecutor:
+        supported_variants = frozenset({AblationVariant.FULL_MEDDIAL})
+
+        def execute(self, config, profiles):  # pragma: no cover - must not be called
+            raise AssertionError("executor should not run")
+
+    with pytest.raises(ValueError, match="missing variant implementations"):
+        PublicationStudyRunner(tmp_path).run(design, [], IncompleteExecutor())

@@ -7,6 +7,7 @@ not establish a primary-care setting or prove clinical severity.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import re
 from collections.abc import Mapping, Sequence
@@ -52,6 +53,26 @@ EXCLUDE_PATTERNS: tuple[str, ...] = (
     r"\bmajor trauma\b",
     r"\bintracranial hemorrhage\b",
     r"\bacute stroke\b",
+    r"\bstemi\b",
+    r"\bnstemi\b",
+    r"\bmyocardial infarction\b",
+    r"\bacute coronary syndrome\b",
+    r"\bcardiogenic shock\b",
+    r"\bcomplete heart block\b",
+    r"\bpulmonary embol(?:ism|us)\b",
+    r"\baortic dissection\b",
+    r"\bdiabetic ketoacidosis\b",
+    r"\bstatus epilepticus\b",
+    r"\bgastrointestinal bleed(?:ing)?\b",
+)
+
+STRUCTURED_EXCLUSION_FLAGS: tuple[str, ...] = (
+    "has_icu_stay",
+    "hospital_expire_flag",
+    "mechanical_ventilation",
+    "major_surgery",
+    "major_trauma",
+    "active_malignancy",
 )
 
 
@@ -61,15 +82,37 @@ class CohortFilterResult:
     reason: str
     matched_inclusions: tuple[str, ...] = ()
     matched_exclusions: tuple[str, ...] = ()
-    filter_version: str = "lexical-v2"
+    filter_version: str = "lexical-v3"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 def classify_lower_acuity_candidate(
-    note_text: str, chief_complaint: str = ""
+    note_text: str,
+    chief_complaint: str = "",
+    metadata: Mapping[str, Any] | None = None,
 ) -> CohortFilterResult:
+    metadata = metadata or {}
+    structured_exclusions = tuple(
+        flag for flag in STRUCTURED_EXCLUSION_FLAGS if bool(metadata.get(flag))
+    )
+    age = metadata.get("age")
+    try:
+        is_minor = age is not None and float(age) < 18
+    except (TypeError, ValueError):
+        is_minor = False
+    admission_type = str(metadata.get("admission_type", "")).strip().lower()
+    if is_minor:
+        structured_exclusions += ("age_under_18",)
+    if admission_type in {"newborn", "neonatal"}:
+        structured_exclusions += ("neonatal_admission",)
+    if structured_exclusions:
+        return CohortFilterResult(
+            False,
+            "Excluded by structured acuity/demographic criteria",
+            matched_exclusions=structured_exclusions,
+        )
     text = f"{chief_complaint}\n{note_text}".lower()
     exclusions = tuple(
         pattern for pattern in EXCLUDE_PATTERNS if re.search(pattern, text, re.IGNORECASE)
@@ -98,12 +141,25 @@ def _selection_key(note: Mapping[str, Any], seed: int) -> str:
 
 
 def deterministic_sample(
-    notes: Sequence[Mapping[str, Any]], limit: int, seed: int = 42
+    notes: Sequence[Mapping[str, Any]],
+    limit: int,
+    seed: int = 42,
+    one_per_patient: bool = True,
 ) -> list[dict[str, Any]]:
     if limit < 0:
         raise ValueError("limit must be non-negative")
     ordered = sorted(notes, key=lambda note: _selection_key(note, seed))
-    return [dict(note) for note in ordered[:limit]]
+    selected: list[dict[str, Any]] = []
+    seen_patients: set[str] = set()
+    for note in ordered:
+        patient_id = str(note.get("subject_id"))
+        if one_per_patient and patient_id in seen_patients:
+            continue
+        seen_patients.add(patient_id)
+        selected.append(dict(note))
+        if len(selected) == limit:
+            break
+    return selected
 
 
 def create_cohort_manifest(
@@ -118,16 +174,54 @@ def create_cohort_manifest(
             "row_id": note.get("row_id"),
             "selection_key": _selection_key(note, seed),
             "filter": note.get("light_case_filter"),
+            "clinical_review_status": note.get("clinical_review_status", "not_recorded"),
         }
         for note in selected
     ]
     payload = {
-        "manifest_version": "1.0",
-        "filter_version": "lexical-v2",
+        "manifest_version": "2.0",
+        "filter_version": "lexical-v3",
+        "data_classification": "restricted_clinical",
+        "publishable": False,
         "seed": seed,
         "source": source,
         "selected_count": len(entries),
         "selected": entries,
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    payload["manifest_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return payload
+
+
+def create_release_manifest(
+    private_manifest: Mapping[str, Any],
+    *,
+    publication_salt: str,
+) -> dict[str, Any]:
+    """Create a public manifest without MIMIC identifiers or reversible selection keys."""
+
+    if len(publication_salt) < 16:
+        raise ValueError("publication_salt must contain at least 16 characters")
+    selected = []
+    for position, entry in enumerate(private_manifest.get("selected", []), start=1):
+        identity = f"{entry.get('subject_id')}:{entry.get('hadm_id')}:{entry.get('row_id')}"
+        digest = hmac.new(
+            publication_salt.encode("utf-8"), identity.encode("utf-8"), hashlib.sha256
+        ).hexdigest()[:20]
+        selected.append(
+            {
+                "study_id": f"MEDDIAL-{digest}",
+                "selection_order": position,
+                "clinical_review_status": entry.get("clinical_review_status", "not_recorded"),
+            }
+        )
+    payload = {
+        "manifest_version": "2.0-release",
+        "filter_version": private_manifest.get("filter_version", "lexical-v3"),
+        "data_classification": "public_metadata_only",
+        "publishable": True,
+        "selected_count": len(selected),
+        "selected": selected,
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     payload["manifest_hash"] = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -146,6 +240,8 @@ def load_manifest_selection(
 ) -> list[dict[str, Any]]:
     with Path(path).open(encoding="utf-8") as handle:
         manifest = json.load(handle)
+    if manifest.get("publishable") is True:
+        raise ValueError("Release manifests intentionally cannot resolve MIMIC source records")
     available = {
         (note.get("subject_id"), note.get("hadm_id"), note.get("row_id")): note
         for note in available_notes

@@ -18,32 +18,32 @@ class RepetitionTracker:
 
         # Define problematic patterns to detect
         self.problematic_patterns = {
-            'doctor': [
-                r'^thank you for (sharing|letting me know|telling me)',
-                r'^i understand',
+            "doctor": [
+                r"^thank you for (sharing|letting me know|telling me)",
+                r"^i understand",
                 r"^i'm sorry",
-                r'^i appreciate',
-                r'^that sounds',
+                r"^i appreciate",
+                r"^that sounds",
             ],
-            'patient': [
-                r'^um\.{3}',
-                r'^well\.{3}',
-                r'^uh\.{3}',
-                r'should i be worried',
-                r'is this (something )?serious',
-                r'is that normal',
-            ]
+            "patient": [
+                r"^um\.{3}",
+                r"^well\.{3}",
+                r"^uh\.{3}",
+                r"should i be worried",
+                r"is this (something )?serious",
+                r"is that normal",
+            ],
         }
 
     def extract_opening_phrase(self, text: str) -> str:
         """Extract the opening 3-5 words of a response"""
         # Remove markdown formatting
-        clean_text = re.sub(r'\*\*.*?\*\*', '', text)
+        clean_text = re.sub(r"\*\*.*?\*\*", "", text)
         # Get first sentence
-        first_sentence = clean_text.split('.')[0].strip()
+        first_sentence = clean_text.split(".")[0].strip()
         # Get first few words
         words = first_sentence.lower().split()[:5]
-        return ' '.join(words)
+        return " ".join(words)
 
     def is_repetitive_opening(self, response: str) -> bool:
         """Check if the response opening is too similar to recent responses"""
@@ -53,8 +53,11 @@ class RepetitionTracker:
             return False
 
         # Check against recent openings
-        similarity_count = sum(1 for recent in self.recent_openings
-                              if self._calculate_similarity(opening, recent) > 0.7)
+        similarity_count = sum(
+            1
+            for recent in self.recent_openings
+            if self._calculate_similarity(opening, recent) > 0.7
+        )
 
         return similarity_count >= 2  # If similar to 2+ recent responses
 
@@ -81,7 +84,7 @@ class RepetitionTracker:
             self.recent_openings.pop(0)
 
         # Track phrase patterns
-        agent_type = 'doctor' if 'doctor' in self.agent_name.lower() else 'patient'
+        agent_type = "doctor" if "doctor" in self.agent_name.lower() else "patient"
         for pattern in self.problematic_patterns.get(agent_type, []):
             if re.search(pattern, response.lower()):
                 self.phrase_counts[pattern] += 1
@@ -92,39 +95,51 @@ class RepetitionTracker:
 
         # Check opening repetition
         if self.is_repetitive_opening(response):
-            warnings.append("⚠️ You're starting responses similarly to recent turns - vary your opening")
+            warnings.append(
+                "⚠️ You're starting responses similarly to recent turns - vary your opening"
+            )
 
         # Check problematic phrases
-        agent_type = 'doctor' if 'doctor' in self.agent_name.lower() else 'patient'
+        agent_type = "doctor" if "doctor" in self.agent_name.lower() else "patient"
         for pattern in self.problematic_patterns.get(agent_type, []):
             if re.search(pattern, response.lower()):
                 count = self.phrase_counts[pattern]
                 if count >= 3:  # Used 3+ times already
-                    warnings.append(f"⚠️ You've used this phrase pattern {count} times - find alternative phrasing")
+                    warnings.append(
+                        f"⚠️ You've used this phrase pattern {count} times - find alternative phrasing"
+                    )
 
-        return ' '.join(warnings) if warnings else None
+        return " ".join(warnings) if warnings else None
 
     def get_usage_stats(self) -> Dict:
         """Get statistics on phrase usage"""
         return {
-            'total_tracked_responses': len(self.recent_openings),
-            'phrase_counts': dict(self.phrase_counts),
-            'recent_openings': self.recent_openings
+            "total_tracked_responses": len(self.recent_openings),
+            "phrase_counts": dict(self.phrase_counts),
+            "recent_openings": self.recent_openings,
         }
 
 
 def detect_symptom_repetition(conversation_history: List[Dict]) -> List[str]:
     """Detect if the same symptoms are being repeated unnecessarily"""
     symptom_keywords = [
-        'pain', 'headache', 'fever', 'cough', 'nausea', 'dizziness',
-        'fatigue', 'weakness', 'shortness of breath', 'chest pain'
+        "pain",
+        "headache",
+        "fever",
+        "cough",
+        "nausea",
+        "dizziness",
+        "fatigue",
+        "weakness",
+        "shortness of breath",
+        "chest pain",
     ]
 
     # Track how many times each symptom is mentioned
     symptom_mentions = Counter()
 
     for msg in conversation_history[-6:]:  # Last 6 messages
-        content_lower = msg['content'].lower()
+        content_lower = msg["content"].lower()
         for symptom in symptom_keywords:
             if symptom in content_lower:
                 symptom_mentions[symptom] += 1

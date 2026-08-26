@@ -60,11 +60,13 @@ class InjectedErrorBenchmark:
         rng = random.Random(self.seed)
         corrupted: list[dict[str, str]] = [copy.deepcopy(dict(turn)) for turn in dialogue]
         patient_indices = [
-            index for index, turn in enumerate(corrupted)
+            index
+            for index, turn in enumerate(corrupted)
             if str(turn.get("role", "")).lower() == "patient"
         ]
         doctor_indices = [
-            index for index, turn in enumerate(corrupted)
+            index
+            for index, turn in enumerate(corrupted)
             if str(turn.get("role", "")).lower() == "doctor"
         ]
         index = rng.choice(patient_indices or list(range(len(corrupted))))
@@ -74,12 +76,20 @@ class InjectedErrorBenchmark:
 
         if corruption_type is CorruptionType.PATIENT_DIAGNOSIS_LEAKAGE:
             diagnoses = core.get("Diagnoses", [])
-            value = diagnoses[0].get("primary", "the hidden diagnosis") if diagnoses else "the hidden diagnosis"
+            value = (
+                diagnoses[0].get("primary", "the hidden diagnosis")
+                if diagnoses
+                else "the hidden diagnosis"
+            )
             corrupted[index]["content"] = f"I already know I have {value}."
             detector = "knowledge_boundary"
         elif corruption_type is CorruptionType.PATIENT_TREATMENT_LEAKAGE:
             treatments = core.get("Treatment_Options", [])
-            value = treatments[0].get("treatment", "the hidden treatment") if treatments else "the hidden treatment"
+            value = (
+                treatments[0].get("treatment", "the hidden treatment")
+                if treatments
+                else "the hidden treatment"
+            )
             corrupted[index]["content"] = f"My established treatment is {value}."
             detector = "knowledge_boundary"
         elif corruption_type is CorruptionType.FABRICATED_PATIENT_SYMPTOM:
@@ -87,7 +97,11 @@ class InjectedErrorBenchmark:
         elif corruption_type is CorruptionType.DOCTOR_HIDDEN_FACT_LEAKAGE:
             index = rng.choice(doctor_indices or [0])
             symptoms = core.get("Symptoms", [])
-            value = symptoms[0].get("description", "your hidden symptom") if symptoms else "your hidden symptom"
+            value = (
+                symptoms[0].get("description", "your hidden symptom")
+                if symptoms
+                else "your hidden symptom"
+            )
             corrupted[index]["content"] = f"Your record tells me you have {value}."
             detector = "knowledge_boundary"
         elif corruption_type is CorruptionType.UNSUPPORTED_DOCTOR_FACT:

@@ -60,12 +60,9 @@ class KnowledgeBoundaryValidator:
 
         symptom_values = _values(core.get("Symptoms", []), ("description",))
         diagnosis_values = _values(core.get("Diagnoses", []), ("primary",))
-        treatment_values = _values(
-            core.get("Treatment_Options", []), ("procedure", "treatment")
-        )
+        treatment_values = _values(core.get("Treatment_Options", []), ("procedure", "treatment"))
         medication_values = _values(
-            list(ctx.get("Current_Medications", []))
-            + list(ctx.get("Discharge_Medications", [])),
+            list(ctx.get("Current_Medications", [])) + list(ctx.get("Discharge_Medications", [])),
             ("name",),
         )
         allergy_values = [str(value).strip() for value in ctx.get("Allergies", []) if value]
@@ -128,8 +125,7 @@ class KnowledgeBoundaryValidator:
                 for category, value in doctor_hidden:
                     term = value.lower()
                     allowed_inference = (
-                        category == "diagnosis"
-                        and claim_type is ClaimType.DIAGNOSTIC_HYPOTHESIS
+                        category == "diagnosis" and claim_type is ClaimType.DIAGNOSTIC_HYPOTHESIS
                     ) or (
                         category in {"treatment", "medication"}
                         and claim_type in {ClaimType.RECOMMENDATION, ClaimType.ADVICE}

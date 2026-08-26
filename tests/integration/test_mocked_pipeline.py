@@ -55,7 +55,10 @@ def test_pipeline_writes_immutable_records_and_separate_stats(
     monkeypatch.setattr(
         framework,
         "simulate_dialogue",
-        lambda *args, **kwargs: (dialogue, "\n".join(f"{t['role']}: {t['content']}" for t in dialogue)),
+        lambda *args, **kwargs: (
+            dialogue,
+            "\n".join(f"{t['role']}: {t['content']}" for t in dialogue),
+        ),
     )
     pipeline = DialogueGenerationPipeline(
         max_attempts=2,
@@ -65,9 +68,7 @@ def test_pipeline_writes_immutable_records_and_separate_stats(
         doctor_factory=FakeAgent,
         patient_factory=FakeAgent,
     )
-    stats = pipeline.run_pipeline(
-        [clinical_reference], profile_types=["NO_DIAGNOSIS_NO_TREATMENT"]
-    )
+    stats = pipeline.run_pipeline([clinical_reference], profile_types=["NO_DIAGNOSIS_NO_TREATMENT"])
     assert stats["successful_dialogues"] == 1
     assert stats["statistics_source"] == "immutable_attempt_records"
     attempt_files = list((pipeline.run_dir / "attempt_records").glob("*.json"))

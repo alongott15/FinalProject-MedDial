@@ -1,19 +1,28 @@
+import copy
 import json
 import logging
-import copy
-from typing import Any, Mapping
-from Models.classes import EvidenceProvenance, GTMF, SCR
-from Utils.utils import format_date, calculate_age
-from Utils.bias_aware_prompts import GTMF_CREATION_PROMPT
-from Utils.markdown_gtmf import save_gtmf_markdown
-import re
 import os
+import re
+from collections.abc import Mapping
+from typing import Any, Protocol
+
 from meddial.cohort import (
     EXCLUDE_PATTERNS,
     INCLUDE_PATTERNS,
     classify_lower_acuity_candidate,
 )
-
+from meddial.llm import (
+    AzureAIFoundryProvider,
+    ChatMessage,
+    DataClassification,
+    LLMProvider,
+    ensure_provider_compatible,
+    load_restricted_clinical_model,
+)
+from Models.classes import SCR, EvidenceProvenance
+from Utils.bias_aware_prompts import GTMF_CREATION_PROMPT
+from Utils.markdown_gtmf import save_gtmf_markdown
+from Utils.utils import calculate_age, format_date
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,7 +39,8 @@ def is_light_common_case(note_text: str, chief_complaint: str = "") -> dict:
     """Compatibility wrapper for the versioned lower-acuity lexical filter."""
     return classify_lower_acuity_candidate(note_text, chief_complaint).to_dict()
 
-def get_existing_gtmf_ids(output_dir: str = 'gtmf') -> set:
+
+def get_existing_gtmf_ids(output_dir: str = "gtmf") -> set:
     """
     Get set of (subject_id, hadm_id) tuples for existing GTMFs.
 
@@ -43,9 +53,9 @@ def get_existing_gtmf_ids(output_dir: str = 'gtmf') -> set:
         return existing_ids
 
     for filename in os.listdir(output_dir):
-        if filename.startswith('gtmf_') and filename.endswith('.md'):
+        if filename.startswith("gtmf_") and filename.endswith(".md"):
             # Parse filename: gtmf_10145_135661.md
-            parts = filename.replace('gtmf_', '').replace('.md', '').split('_')
+            parts = filename.replace("gtmf_", "").replace(".md", "").split("_")
             if len(parts) == 2:
                 try:
                     subject_id = int(parts[0])
@@ -59,26 +69,25 @@ def get_existing_gtmf_ids(output_dir: str = 'gtmf') -> set:
 
 
 def aggressive_json_clean(text: str) -> str:
-    text = re.sub(r'```[a-z]*\n?', '', text)
-    text = re.sub(r'```', '', text)
+    text = re.sub(r"```[a-z]*\n?", "", text)
+    text = re.sub(r"```", "", text)
 
-    prefixes = ['Here is the JSON:', 'JSON:', 'Response:', 'Output:', 'Result:']
+    prefixes = ["Here is the JSON:", "JSON:", "Response:", "Output:", "Result:"]
     for prefix in prefixes:
         if text.strip().startswith(prefix):
-            text = text.strip()[len(prefix):].strip()
+            text = text.strip()[len(prefix) :].strip()
 
-    text = re.sub(r'\n+', ' ', text)
-    text = re.sub(r'\t+', ' ', text)
-    text = re.sub(r'\s+', ' ', text)
-    text = re.sub(r',(\s*[}\]])', r'\1', text)
+    text = re.sub(r"\n+", " ", text)
+    text = re.sub(r"\t+", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r",(\s*[}\]])", r"\1", text)
 
     return text.strip()
 
+
 def safe_json_parse_object(json_str: str, field_name: str = "") -> dict:
-    if not json_str or json_str.strip() in ['', '{}']:
-        raise ClinicalReferenceExtractionError(
-            f"{field_name or 'extraction'} returned empty JSON"
-        )
+    if not json_str or json_str.strip() in ["", "{}"]:
+        raise ClinicalReferenceExtractionError(f"{field_name or 'extraction'} returned empty JSON")
 
     try:
         result = json.loads(json_str)
@@ -90,12 +99,12 @@ def safe_json_parse_object(json_str: str, field_name: str = "") -> dict:
     except json.JSONDecodeError:
         try:
             cleaned = json_str.strip()
-            if not cleaned.startswith('{'):
-                cleaned = '{' + cleaned
-            if not cleaned.endswith('}'):
-                cleaned = cleaned + '}'
+            if not cleaned.startswith("{"):
+                cleaned = "{" + cleaned
+            if not cleaned.endswith("}"):
+                cleaned = cleaned + "}"
             cleaned = re.sub(r'(?<!\\)"(?=[^",\]\}]*")', '\\"', cleaned)
-            cleaned = re.sub(r',(\s*[}\]])', r'\1', cleaned)
+            cleaned = re.sub(r",(\s*[}\]])", r"\1", cleaned)
             result = json.loads(cleaned)
             if isinstance(result, dict):
                 return result
@@ -105,43 +114,71 @@ def safe_json_parse_object(json_str: str, field_name: str = "") -> dict:
             ) from exc
         raise ClinicalReferenceExtractionError(
             f"Could not parse {field_name or 'extraction'} JSON"
+        ) from None
+
+
+class ClinicalReferenceClient(Protocol):
+    @property
+    def model_name(self) -> str: ...
+
+    def chat_completion(
+        self, system_message: str, user_message: str, temperature: float = 0.0
+    ) -> str: ...
+
+
+class ProviderClinicalReferenceClient:
+    """SCR-extraction client that enforces the restricted-clinical boundary."""
+
+    def __init__(
+        self,
+        provider: LLMProvider,
+        data_classification: DataClassification = DataClassification.RESTRICTED_CLINICAL,
+    ) -> None:
+        ensure_provider_compatible(provider, data_classification)
+        self.provider = provider
+        self.data_classification = data_classification
+
+    @property
+    def model_name(self) -> str:
+        return self.provider.model_name
+
+    def chat_completion(
+        self, system_message: str, user_message: str, temperature: float = 0.0
+    ) -> str:
+        del temperature  # decoding belongs to the configured provider
+        return self.provider.generate(
+            [
+                ChatMessage(role="system", content=system_message),
+                ChatMessage(role="user", content=user_message),
+            ]
+        ).content
+
+
+class AzureAIClient(ProviderClinicalReferenceClient):
+    """Compatibility adapter for public/synthetic inputs only.
+
+    MIMIC and its derived SCRs must use ``ProviderClinicalReferenceClient``
+    with a local controlled provider.
+    """
+
+    def __init__(
+        self,
+        endpoint: str | None = None,
+        api_key: str | None = None,
+        model_name: str = "gpt-4.1",
+        *,
+        data_classification: DataClassification = DataClassification.RESTRICTED_CLINICAL,
+    ) -> None:
+        provider = AzureAIFoundryProvider(
+            endpoint=endpoint,
+            api_key=api_key,
+            model_name=model_name,
+            temperature=0.0,
+            max_tokens=2048,
+            data_classification=data_classification,
         )
+        super().__init__(provider, data_classification=data_classification)
 
-class AzureAIClient:
-    def __init__(self, endpoint: str = None, api_key: str = None, model_name: str = "gpt-4.1"):
-        self.endpoint = endpoint or os.getenv("AZURE_AI_ENDPOINT")
-        self.api_key = api_key or os.getenv("AZURE_AI_API_KEY")
-        self.model_name = model_name
-
-        if not self.endpoint or not self.api_key:
-            raise ValueError("Azure AI endpoint and API key must be provided")
-
-        try:
-            from azure.ai.inference import ChatCompletionsClient
-            from azure.core.credentials import AzureKeyCredential
-        except ImportError as exc:
-            raise RuntimeError("Install MedDial with the 'azure' extra") from exc
-        self.client = ChatCompletionsClient(
-            endpoint=self.endpoint,
-            credential=AzureKeyCredential(self.api_key)
-        )
-
-    def chat_completion(self, system_message: str, user_message: str, temperature: float = 0.0) -> str:
-        try:
-            from azure.ai.inference.models import SystemMessage, UserMessage
-            response = self.client.complete(
-                messages=[
-                    SystemMessage(content=system_message),
-                    UserMessage(content=user_message)
-                ],
-                model=self.model_name,
-                temperature=temperature,
-                max_tokens=2048
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Azure AI completion failed: {e}")
-            raise
 
 def chunk_medical_text(text: str, max_chunk_size: int = 3000, overlap: int = 200) -> list[str]:
     if len(text) <= max_chunk_size:
@@ -154,8 +191,8 @@ def chunk_medical_text(text: str, max_chunk_size: int = 3000, overlap: int = 200
         end = start + max_chunk_size
 
         if end < len(text):
-            last_period = text.rfind('.', end - 200, end)
-            last_newline = text.rfind('\n', end - 200, end)
+            last_period = text.rfind(".", end - 200, end)
+            last_newline = text.rfind("\n", end - 200, end)
 
             if last_period > start:
                 end = last_period + 1
@@ -172,6 +209,7 @@ def chunk_medical_text(text: str, max_chunk_size: int = 3000, overlap: int = 200
             break
 
     return chunks
+
 
 def _annotate_chunk_evidence(
     extraction: dict[str, Any],
@@ -206,10 +244,18 @@ def _annotate_chunk_evidence(
             if isinstance(entity, dict):
                 entity.setdefault("evidence", []).append(evidence)
     history = context.setdefault("Medical_History", {})
-    if isinstance(history, dict) and history.get("Past_Medical_History") not in (None, "", "not provided"):
+    if isinstance(history, dict) and history.get("Past_Medical_History") not in (
+        None,
+        "",
+        "not provided",
+    ):
         history.setdefault("evidence", []).append(evidence)
     additional = annotated.setdefault("Additional_Context", {})
-    if isinstance(additional, dict) and additional.get("Chief_Complaint") not in (None, "", "not provided"):
+    if isinstance(additional, dict) and additional.get("Chief_Complaint") not in (
+        None,
+        "",
+        "not provided",
+    ):
         additional.setdefault("evidence", []).append(evidence)
     annotated.setdefault("reference_evidence", []).append(evidence)
     return annotated
@@ -217,7 +263,7 @@ def _annotate_chunk_evidence(
 
 def extract_scr_chunked(
     medical_text: str,
-    azure_client: AzureAIClient,
+    azure_client: ClinicalReferenceClient,
     source_note_id: str = "current_note",
 ) -> SCR:
     if not medical_text or not medical_text.strip():
@@ -225,10 +271,13 @@ def extract_scr_chunked(
     schema_json = SCR.model_json_schema()
     chunks = chunk_medical_text(medical_text, max_chunk_size=3000, overlap=200)
 
-    system_message = GTMF_CREATION_PROMPT + """
+    system_message = (
+        GTMF_CREATION_PROMPT
+        + """
 
     CRITICAL: Output ONLY valid JSON - no explanations, no markdown, no code blocks.
     Always start your response directly with the opening brace { and end with closing brace }"""
+    )
 
     all_extractions = []
 
@@ -257,11 +306,11 @@ def extract_scr_chunked(
             brace_count = 0
 
             for idx, char in enumerate(cleaned_result):
-                if char == '{':
+                if char == "{":
                     if json_start == -1:
                         json_start = idx
                     brace_count += 1
-                elif char == '}':
+                elif char == "}":
                     brace_count -= 1
                     if brace_count == 0 and json_start != -1:
                         json_end = idx + 1
@@ -269,7 +318,7 @@ def extract_scr_chunked(
 
             if json_start >= 0 and json_end > json_start:
                 json_str = cleaned_result[json_start:json_end]
-                data = safe_json_parse_object(json_str, f"chunk_{i+1}")
+                data = safe_json_parse_object(json_str, f"chunk_{i + 1}")
 
                 if data and data != {}:
                     all_extractions.append(
@@ -284,7 +333,7 @@ def extract_scr_chunked(
                     )
 
         except Exception as e:
-            logger.error(f"Error processing chunk {i+1}: {e}")
+            logger.error(f"Error processing chunk {i + 1}: {e}")
             continue
 
     if not all_extractions:
@@ -339,9 +388,7 @@ def _deep_merge(first: Any, second: Any) -> Any:
     return copy.deepcopy(first)
 
 
-def _merge_entity_lists(
-    lists: list[list[Any]], key_fields: tuple[str, ...]
-) -> list[Any]:
+def _merge_entity_lists(lists: list[list[Any]], key_fields: tuple[str, ...]) -> list[Any]:
     merged: dict[str, Any] = {}
     order: list[str] = []
     for entities in lists:
@@ -391,9 +438,7 @@ def merge_scr_extractions(extractions: list[dict]) -> dict:
         ("structured_procedures", ("icd9_code", "description")),
         ("structured_prescriptions", ("drug", "dose_val_rx")),
     ):
-        merged[key] = _merge_entity_lists(
-            [item.get(key, []) for item in extractions], fields
-        )
+        merged[key] = _merge_entity_lists([item.get(key, []) for item in extractions], fields)
     merged["reference_evidence"] = _merge_entity_lists(
         [item.get("reference_evidence", []) for item in extractions],
         ("source_note_id", "chunk_index", "extractor"),
@@ -407,7 +452,8 @@ def merge_scr_extractions(extractions: list[dict]) -> dict:
 extract_gtmf_chunked = extract_scr_chunked
 merge_gtmf_extractions = merge_scr_extractions
 
-def process_notes(results, azure_client: AzureAIClient, output_dir: str = 'gtmf'):
+
+def process_notes(results, azure_client: ClinicalReferenceClient, output_dir: str = "gtmf"):
     os.makedirs(output_dir, exist_ok=True)
 
     # CRITICAL: Load existing GTMFs to avoid regeneration
@@ -433,61 +479,70 @@ def process_notes(results, azure_client: AzureAIClient, output_dir: str = 'gtmf'
                 logger.info(f"  Skipped existing: {quality_summary['skipped_existing']}")
 
             # CRITICAL: Skip if already exists
-            subject_id = row['subject_id']
-            hadm_id = row['hadm_id']
+            subject_id = row["subject_id"]
+            hadm_id = row["hadm_id"]
 
             if (subject_id, hadm_id) in existing_ids:
                 logger.info(f"  Skipping existing profile: {subject_id}_{hadm_id}")
                 quality_summary["skipped_existing"] += 1
                 continue
 
-            light_case_result = is_light_common_case(row['text'])
-            if not light_case_result['passed']:
+            light_case_result = row.get("light_case_filter") or is_light_common_case(row["text"])
+            if not light_case_result["passed"]:
                 quality_summary["light_case_failed"] += 1
                 continue
-            else:
-                quality_summary["light_case_passed"] += 1
+            if row.get("clinical_review_status") != "eligible":
+                raise ClinicalReferenceExtractionError(
+                    "Record was not accepted by the two-clinician review workflow"
+                )
+            quality_summary["light_case_passed"] += 1
 
-            dob_formatted = format_date(row['dob'], '%Y-%m-%d')
-            adm_formatted = format_date(row['admittime'], '%Y-%m-%d %H:%M:%S')
-            dis_formatted = format_date(row['dischtime'], '%Y-%m-%d %H:%M:%S')
-            age = calculate_age(dob_formatted, adm_formatted)
+            dob_formatted = format_date(row["dob"], "%Y-%m-%d")
+            adm_formatted = format_date(row["admittime"], "%Y-%m-%d %H:%M:%S")
+            dis_formatted = format_date(row["dischtime"], "%Y-%m-%d %H:%M:%S")
+            age = int(row.get("age", calculate_age(dob_formatted, adm_formatted)))
 
             demographics = {
-                'Date_of_Birth': dob_formatted,
-                'Age': age,
-                'Sex': row.get('gender', 'Not provided'),
-                'Religion': row.get('religion', 'Not provided'),
-                'Marital_Status': row.get('marital_status', 'Not provided'),
-                'Ethnicity': row.get('ethnicity', 'Not provided'),
-                'Insurance': row.get('insurance', 'Not provided'),
-                'Admission_Type': row.get('admission_type', 'Not provided'),
-                'Admission_Date': adm_formatted,
-                'Discharge_Date': dis_formatted
+                "Date_of_Birth": dob_formatted,
+                "Age": age,
+                "Sex": row.get("gender", "Not provided"),
+                "Religion": row.get("religion", "Not provided"),
+                "Marital_Status": row.get("marital_status", "Not provided"),
+                "Ethnicity": row.get("ethnicity", "Not provided"),
+                "Insurance": row.get("insurance", "Not provided"),
+                "Admission_Type": row.get("admission_type", "Not provided"),
+                "Admission_Date": adm_formatted,
+                "Discharge_Date": dis_formatted,
             }
 
             gtmf_instance = extract_scr_chunked(
-                row['text'],
+                row["text"],
                 azure_client,
                 source_note_id=f"{row['subject_id']}_{row['hadm_id']}",
             )
             quality_summary["total_processed"] += 1
 
-            gtmf_instance = gtmf_instance.model_copy(update={
-                "row_id": row['row_id'],
-                "subject_id": row['subject_id'],
-                "hadm_id": row['hadm_id'],
-                "Context_Fields": gtmf_instance.Context_Fields.model_copy(update={
-                    "Patient_Demographics": gtmf_instance.Context_Fields.Patient_Demographics.model_copy(update=demographics)
-                })
-            })
+            gtmf_instance = gtmf_instance.model_copy(
+                update={
+                    "row_id": row["row_id"],
+                    "subject_id": row["subject_id"],
+                    "hadm_id": row["hadm_id"],
+                    "Context_Fields": gtmf_instance.Context_Fields.model_copy(
+                        update={
+                            "Patient_Demographics": gtmf_instance.Context_Fields.Patient_Demographics.model_copy(
+                                update=demographics
+                            )
+                        }
+                    ),
+                }
+            )
 
             result = gtmf_instance.model_dump()
             result["light_case_filter"] = light_case_result
-            result["case_type"] = "LOWER_ACUITY_LEXICAL_CANDIDATE"
+            result["case_type"] = "CLINICIAN_VALIDATED_LOWER_ACUITY_PRESENTING_SYMPTOM"
 
-            subject_id = row['subject_id']
-            hadm_id = row['hadm_id']
+            subject_id = row["subject_id"]
+            hadm_id = row["hadm_id"]
             filename = f"gtmf_{subject_id}_{hadm_id}.md"
             output_path = os.path.join(output_dir, filename)
             save_gtmf_markdown(result, output_path)
@@ -508,11 +563,14 @@ def process_notes(results, azure_client: AzureAIClient, output_dir: str = 'gtmf'
 
     return quality_summary
 
+
 def main():
     try:
-        azure_client = AzureAIClient()
+        clinical_client = ProviderClinicalReferenceClient(
+            load_restricted_clinical_model(temperature=0.0, max_tokens=2048)
+        )
     except Exception as e:
-        logger.error(f"Failed to initialize Azure AI client: {e}")
+        logger.error(f"Failed to initialize the local clinical model: {e}")
         return
 
     csv_dir = os.getenv("MIMIC_CSV_DIR")
@@ -527,32 +585,36 @@ def main():
 
     try:
         from Utils.csv_data_loader import CSVDataLoader
+
         loader = CSVDataLoader(csv_dir)
-        # Fetch more notes to reach target after skipping existing (95 existing + ~205 new = 300 total)
-        # Selection is deterministic and recorded in a manifest. The filter
-        # identifies lexical candidates; it does not establish primary-care severity.
-        results = loader.fetch_notes_with_light_case_filter(
+        reviews_path = os.getenv("MEDDIAL_COHORT_REVIEWS")
+        if not reviews_path:
+            raise ValueError(
+                "MEDDIAL_COHORT_REVIEWS must point to a completed private two-clinician review file"
+            )
+        results = loader.fetch_clinician_validated_notes(
+            reviews_path,
             category_filter="Discharge summary",
-            limit=800,
+            limit=200,
             seed=42,
             manifest_path="gtmf/cohort_manifest.json",
         )
         if not results:
-            logger.error("No eligible lower-acuity lexical candidates found")
+            logger.error("No clinician-validated cohort records found")
             return
     except Exception as e:
         logger.error(f"Error loading CSV data: {e}")
         return
 
     try:
-        output_dir = 'gtmf'
-        summary = process_notes(results, azure_client, output_dir)
+        output_dir = "gtmf"
+        summary = process_notes(results, clinical_client, output_dir)
 
-        summary_path = os.path.join(output_dir, 'processing_summary.json')
-        with open(summary_path, 'w', encoding='utf-8') as outfile:
+        summary_path = os.path.join(output_dir, "processing_summary.json")
+        with open(summary_path, "w", encoding="utf-8") as outfile:
             json.dump(summary, outfile, indent=2)
 
-        print(f"\n=== SCR Processing Summary ===")
+        print("\n=== SCR Processing Summary ===")
         print(f"Total processed: {summary['total_processed']}")
         print(f"Skipped existing: {summary['skipped_existing']}")
         print(f"SCRs created (NEW): {summary['gtmfs_created']}")
@@ -563,5 +625,6 @@ def main():
     except Exception as e:
         logger.error(f"Error in main execution: {e}")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

@@ -23,9 +23,13 @@ jobs:
       - name: Install project and development tools
         run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
       - name: Ruff
-        run: ruff check meddial tests Models dialogue_generation_framework.py
+        run: >-
+          ruff check meddial tests Models scripts dialogue_generation_framework.py
+          gtmf_creation.py Utils/csv_data_loader.py
       - name: Mypy
         run: mypy meddial
+      - name: Restricted-artifact guard
+        run: python scripts/check_repository_hygiene.py
       - name: Pytest (mocked model calls only)
         env:
           MEDDIAL_DISABLE_EXTERNAL_CALLS: "1"

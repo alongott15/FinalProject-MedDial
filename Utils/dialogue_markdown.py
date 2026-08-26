@@ -5,9 +5,9 @@ from pathlib import Path
 def dialogue_to_markdown(dialogue_result: dict) -> str:
     lines = []
 
-    profile_id = dialogue_result.get('profile_id', 'unknown')
-    subject_id = dialogue_result.get('subject_id', 'unknown')
-    hadm_id = dialogue_result.get('hadm_id', 'unknown')
+    profile_id = dialogue_result.get("profile_id", "unknown")
+    subject_id = dialogue_result.get("subject_id", "unknown")
+    hadm_id = dialogue_result.get("hadm_id", "unknown")
 
     lines.append(f"# Patient-Physician Dialogue: {profile_id}\n")
 
@@ -18,24 +18,24 @@ def dialogue_to_markdown(dialogue_result: dict) -> str:
     lines.append(f"- **Success**: {dialogue_result.get('success', False)}")
     lines.append(f"- **Is Realistic**: {dialogue_result.get('is_realistic', False)}\n")
 
-    attempts_summary = dialogue_result.get('attempts_summary', [])
+    attempts_summary = dialogue_result.get("attempts_summary", [])
     if attempts_summary:
         lines.append("## Generation Attempts\n")
         lines.append(f"- **Total Attempts**: {dialogue_result.get('total_attempts', 0)}")
         lines.append(f"- **Best Attempt**: {dialogue_result.get('best_attempt', 0)}\n")
 
         for attempt in attempts_summary:
-            attempt_num = attempt.get('attempt', 0)
-            success = attempt.get('success', False)
-            decision = attempt.get('decision', 'N/A')
-            score = attempt.get('score')
+            attempt_num = attempt.get("attempt", 0)
+            success = attempt.get("success", False)
+            decision = attempt.get("decision", "N/A")
+            score = attempt.get("score")
             lines.append(f"### Attempt {attempt_num}")
             lines.append(f"- Success: {success}")
             lines.append(f"- Decision: {decision}")
             lines.append(f"- Score: {score:.3f}" if score is not None else "- Score: UNSCORABLE")
             lines.append("")
 
-    judge_eval = dialogue_result.get('judge_evaluation', {})
+    judge_eval = dialogue_result.get("judge_evaluation", {})
     if judge_eval:
         lines.append("## Judge Evaluation\n")
         lines.append(f"- **Decision**: {judge_eval.get('decision', 'N/A')}")
@@ -43,41 +43,43 @@ def dialogue_to_markdown(dialogue_result: dict) -> str:
         lines.append(f"- **Justification**: {judge_eval.get('justification', 'N/A')}\n")
 
         # Role-aware evaluation sub-score breakdown
-        deepeval = dialogue_result.get('deepeval_scores') or judge_eval.get('deepeval_scores', {})
+        deepeval = dialogue_result.get("deepeval_scores") or judge_eval.get("deepeval_scores", {})
         if deepeval:
             lines.append("### Evaluation Dimensions\n")
             lines.append(f"| Metric | Score |")
             lines.append(f"|---|---|")
-            if deepeval.get('naturalness') is not None:
+            if deepeval.get("naturalness") is not None:
                 lines.append(f"| Naturalness | {deepeval['naturalness']:.3f} |")
-            if deepeval.get('profile_compliance') is not None:
-                lines.append(f"| Profile Compliance ({deepeval.get('profile_type', 'N/A')}) | {deepeval['profile_compliance']:.3f} |")
-            faithfulness = deepeval.get('role_aware_clinical_faithfulness')
+            if deepeval.get("profile_compliance") is not None:
+                lines.append(
+                    f"| Profile Compliance ({deepeval.get('profile_type', 'N/A')}) | {deepeval['profile_compliance']:.3f} |"
+                )
+            faithfulness = deepeval.get("role_aware_clinical_faithfulness")
             if faithfulness is None:
-                faithfulness = deepeval.get('claim_faithfulness')
+                faithfulness = deepeval.get("claim_faithfulness")
             if faithfulness is not None:
                 lines.append(f"| Role-Aware Clinical Faithfulness | {faithfulness:.3f} |")
-            if deepeval.get('knowledge_boundary') is not None:
+            if deepeval.get("knowledge_boundary") is not None:
                 lines.append(f"| Knowledge Boundary | {deepeval['knowledge_boundary']:.3f} |")
-            if deepeval.get('structural_validity') is not None:
+            if deepeval.get("structural_validity") is not None:
                 lines.append(f"| Structural Validity | {deepeval['structural_validity']:.3f} |")
             lines.append("")
 
-        feedback = judge_eval.get('feedback_for_improvement', {})
+        feedback = judge_eval.get("feedback_for_improvement", {})
         if feedback:
             lines.append("### Feedback for Improvement\n")
             for key, value in feedback.items():
                 lines.append(f"**{key.replace('_', ' ').title()}**: {value}\n")
 
-    dialogue = dialogue_result.get('dialogue', [])
+    dialogue = dialogue_result.get("dialogue", [])
     if dialogue:
         lines.append("## Dialogue Transcript\n")
         for turn in dialogue:
-            role = turn.get('role', 'Unknown')
-            content = turn.get('content', '')
+            role = turn.get("role", "Unknown")
+            content = turn.get("content", "")
             lines.append(f"**{role}**: {content}\n")
 
-    stats = dialogue_result.get('dialogue_stats', {})
+    stats = dialogue_result.get("dialogue_stats", {})
     if stats:
         lines.append("## Dialogue Statistics\n")
         lines.append(f"- **Turn Count**: {stats.get('turn_count', 0)}")
@@ -85,7 +87,7 @@ def dialogue_to_markdown(dialogue_result: dict) -> str:
         lines.append(f"- **Doctor Turns**: {stats.get('doctor_turns', 0)}")
         lines.append(f"- **Patient Turns**: {stats.get('patient_turns', 0)}\n")
 
-    processing_time = dialogue_result.get('processing_time', 0)
+    processing_time = dialogue_result.get("processing_time", 0)
     if processing_time:
         lines.append("## Processing Information\n")
         lines.append(f"- **Processing Time**: {processing_time:.1f}s\n")
@@ -96,7 +98,9 @@ def dialogue_to_markdown(dialogue_result: dict) -> str:
 def save_dialogue_markdown(dialogue_result: dict, output_path: str) -> None:
     markdown_content = dialogue_to_markdown(dialogue_result)
 
-    os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
+    os.makedirs(
+        os.path.dirname(output_path) if os.path.dirname(output_path) else ".", exist_ok=True
+    )
 
-    with open(output_path, 'w', encoding='utf-8') as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         f.write(markdown_content)
