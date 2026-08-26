@@ -1,0 +1,9 @@
+{
+  "name": "cmpb-direct-llm",
+  "variant": "direct_llm",
+  "seed": 42,
+  "max_attempts": 1,
+  "max_turns": 30,
+  "profile_types": ["NO_DIAGNOSIS_NO_TREATMENT"],
+  "study_phase": "architecture_ablation"
+}

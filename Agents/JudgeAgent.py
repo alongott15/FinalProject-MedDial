@@ -2,7 +2,7 @@ import logging
 import json
 import re
 from typing import Dict, Tuple
-from Utils.llms_utils import load_gpt_model, chat_generate
+from Utils.llms_utils import chat_generate, load_restricted_clinical_model
 from Utils.bias_aware_prompts import JUDGE_AGENT_PROMPT
 from Utils.mts_dialog_loader import load_mts_dialog_examples
 
@@ -21,12 +21,18 @@ class JudgeAgent:
     - Check for hallucinations and unsupported content
     """
 
-    def __init__(self, llm=None, few_shot_examples: list = None, threshold: float = 0.70, mts_dialog_csv_path: str = None):
+    def __init__(
+        self,
+        llm=None,
+        few_shot_examples: list = None,
+        threshold: float = 0.70,
+        mts_dialog_csv_path: str = None,
+    ):
         if llm:
             self.llm = llm
         else:
             logger.info("Loading LLM for JudgeAgent")
-            self.llm = load_gpt_model(temperature=0.1, max_tokens=800)
+            self.llm = load_restricted_clinical_model(temperature=0.1, max_tokens=800)
 
         if mts_dialog_csv_path:
             logger.info(f"Loading MTS-Dialog examples from {mts_dialog_csv_path}")
@@ -36,13 +42,12 @@ class JudgeAgent:
             self.few_shot_examples = few_shot_examples or []
 
         self.threshold = threshold
-        logger.info(f"JudgeAgent initialized with threshold={threshold}, examples={len(self.few_shot_examples)}")
+        logger.info(
+            f"JudgeAgent initialized with threshold={threshold}, examples={len(self.few_shot_examples)}"
+        )
 
     def evaluate_dialogue(
-        self,
-        dialogue: list,
-        patient_profile: dict,
-        dialogue_transcript: str = None
+        self, dialogue: list, patient_profile: dict, dialogue_transcript: str = None
     ) -> Dict:
         """
         Evaluate a dialogue for naturalness and groundedness.
@@ -71,9 +76,10 @@ class JudgeAgent:
         # Build evaluation prompt
         messages = [
             {"role": "system", "content": JUDGE_AGENT_PROMPT},
-            {"role": "user", "content": self._build_evaluation_prompt(
-                dialogue_transcript, profile_summary
-            )}
+            {
+                "role": "user",
+                "content": self._build_evaluation_prompt(dialogue_transcript, profile_summary),
+            },
         ]
 
         # Get LLM response
@@ -84,63 +90,68 @@ class JudgeAgent:
             # Parse response
             evaluation = self._parse_evaluation_response(response)
 
-            # Apply threshold to determine decision
-            if evaluation['score'] >= self.threshold:
-                evaluation['decision'] = "REALISTIC"
+            # Only a fully parsed evaluation can reach the acceptance gate.
+            if evaluation.get("evaluation_status") != "PASS":
+                evaluation["decision"] = evaluation.get("evaluation_status", "UNSCORABLE")
+            elif evaluation["score"] >= self.threshold:
+                evaluation["decision"] = "REALISTIC"
             else:
-                evaluation['decision'] = "UNREALISTIC"
+                evaluation["decision"] = "UNREALISTIC"
 
-            logger.info(f"Judge decision: {evaluation['decision']} (score: {evaluation['score']:.2f})")
+            logger.info(
+                f"Judge decision: {evaluation['decision']} (score: {evaluation['score']:.2f})"
+            )
             return evaluation
 
         except Exception as e:
             logger.error(f"Error in JudgeAgent evaluation: {e}")
             # Return conservative default
             return {
-                "decision": "UNREALISTIC",
+                "decision": "ERROR",
+                "evaluation_status": "ERROR",
                 "score": 0.0,
                 "justification": f"Evaluation failed: {str(e)}",
                 "feedback_for_improvement": {
                     "patient_side": "Unable to evaluate",
                     "doctor_side": "Unable to evaluate",
-                    "conversation_flow": "Unable to evaluate"
-                }
+                    "conversation_flow": "Unable to evaluate",
+                },
             }
 
     def _format_dialogue(self, dialogue: list) -> str:
         """Format dialogue turns into readable transcript."""
         lines = []
         for turn in dialogue:
-            role = turn.get('role', 'Unknown')
-            content = turn.get('content', '')
+            role = turn.get("role", "Unknown")
+            content = turn.get("content", "")
             lines.append(f"{role}: {content}")
         return "\n".join(lines)
 
     def _format_profile(self, profile: dict) -> str:
         """Format patient profile for judge."""
-        core_fields = profile.get('Core_Fields', {})
-        context_fields = profile.get('Context_Fields', {})
-        additional_context = profile.get('Additional_Context', {})
+        core_fields = profile.get("Core_Fields", {})
+        context_fields = profile.get("Context_Fields", {})
+        additional_context = profile.get("Additional_Context", {})
 
         # Extract key information
-        symptoms = core_fields.get('Symptoms', [])
-        symptom_list = [s.get('description', '') for s in symptoms if isinstance(s, dict)]
+        symptoms = core_fields.get("Symptoms", [])
+        symptom_list = [s.get("description", "") for s in symptoms if isinstance(s, dict)]
 
-        diagnoses = core_fields.get('Diagnoses', [])
-        diagnosis_list = [d.get('primary', '') for d in diagnoses if isinstance(d, dict)]
+        diagnoses = core_fields.get("Diagnoses", [])
+        diagnosis_list = [d.get("primary", "") for d in diagnoses if isinstance(d, dict)]
 
-        demographics = context_fields.get('Patient_Demographics', {})
-        age = demographics.get('Age', 'Unknown')
-        sex = demographics.get('Sex', 'Unknown')
+        demographics = context_fields.get("Patient_Demographics", {})
+        age = demographics.get("Age", "Unknown")
+        sex = demographics.get("Sex", "Unknown")
 
-        chief_complaint = additional_context.get('Chief_Complaint', 'Not specified')
+        chief_complaint = additional_context.get("Chief_Complaint", "Not specified")
 
         profile_text = f"""Patient Profile Summary:
 - Age: {age}, Sex: {sex}
 - Chief Complaint: {chief_complaint}
-- Symptoms: {', '.join(symptom_list) if symptom_list else 'None specified'}
-- Diagnoses: {', '.join(diagnosis_list) if diagnosis_list else 'None specified'}
-- Case Type: Light, common symptoms"""
+- Symptoms: {", ".join(symptom_list) if symptom_list else "None specified"}
+- Diagnoses: {", ".join(diagnosis_list) if diagnosis_list else "None specified"}
+- Cohort Type: Lexically selected research candidate (severity not established)"""
 
         return profile_text
 
@@ -179,66 +190,42 @@ class JudgeAgent:
         # Try to extract JSON
         try:
             # Look for JSON block
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            json_match = re.search(r"\{.*\}", response, re.DOTALL)
             if json_match:
                 eval_dict = json.loads(json_match.group(0))
 
                 # Validate and extract fields
-                decision = eval_dict.get('decision', 'UNREALISTIC')
-                score = float(eval_dict.get('score', 0.0))
+                decision = eval_dict.get("decision", "UNREALISTIC")
+                score = float(eval_dict.get("score", 0.0))
                 score = max(0.0, min(1.0, score))  # Clamp to [0,1]
-                justification = eval_dict.get('justification', 'No justification provided')
-                feedback = eval_dict.get('feedback_for_improvement', {})
+                justification = eval_dict.get("justification", "No justification provided")
+                feedback = eval_dict.get("feedback_for_improvement", {})
 
                 return {
                     "decision": decision,
+                    "evaluation_status": "PASS",
                     "score": score,
                     "justification": justification,
-                    "feedback_for_improvement": feedback
+                    "feedback_for_improvement": feedback,
                 }
         except Exception as e:
             logger.warning(f"Failed to parse JSON from judge response: {e}")
 
-        # Fallback: heuristic parsing
-        score = 0.5
-        decision = "UNREALISTIC"
-        justification = response[:200]
-
-        # Try to extract score from text
-        score_patterns = [
-            r'score[:\s]*(\d+\.?\d*)',
-            r'(\d+\.?\d*)\s*/\s*1\.?0?',
-            r'rating[:\s]*(\d+\.?\d*)'
-        ]
-        for pattern in score_patterns:
-            match = re.search(pattern, response.lower())
-            if match:
-                try:
-                    score = float(match.group(1))
-                    if score > 1.0:  # Handle cases like "8/10"
-                        score = score / 10.0
-                    score = max(0.0, min(1.0, score))
-                    break
-                except:
-                    pass
-
-        # Determine decision from keywords
-        if any(word in response.lower() for word in ['realistic', 'natural', 'good', 'appropriate']):
-            if score >= 0.5:
-                decision = "REALISTIC"
-
+        # Invalid or non-JSON output is explicitly unscorable. Keyword and
+        # numeric heuristics are not sufficient for a publication pass gate.
         feedback = {
-            "patient_side": "See justification",
-            "doctor_side": "See justification",
-            "conversation_flow": "See justification",
-            "safety_or_clarity": "See justification"
+            "patient_side": "Unable to evaluate",
+            "doctor_side": "Unable to evaluate",
+            "conversation_flow": "Unable to evaluate",
+            "safety_or_clarity": "Unable to evaluate",
         }
 
         return {
-            "decision": decision,
-            "score": score,
-            "justification": justification,
-            "feedback_for_improvement": feedback
+            "decision": "UNSCORABLE",
+            "evaluation_status": "UNSCORABLE",
+            "score": 0.0,
+            "justification": "Judge response could not be parsed as the required JSON schema",
+            "feedback_for_improvement": feedback,
         }
 
     def set_few_shot_examples(self, examples: list):

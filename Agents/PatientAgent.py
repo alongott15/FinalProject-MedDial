@@ -1,8 +1,9 @@
 import logging
-from Utils.llms_utils import load_gpt_model, chat_generate
+from Utils.llms_utils import chat_generate, load_restricted_clinical_model
 from Utils.bias_aware_prompts import BASE_SYSTEM_PROMPT, PATIENT_PROFILE_TYPE_KNOWLEDGE
 from Utils.conversation_variety import PatientPersonality, create_varied_prompt_examples
 from Utils.repetition_filter import RepetitionTracker
+from meddial.knowledge import mask_profile_for_patient
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -13,9 +14,11 @@ class PatientAgent:
         if llm:
             self.llm = llm
         else:
-            logger.info("LLM not provided to PatientAgent, loading Azure AI model internally.")
-            self.llm = load_gpt_model(temperature=0.6, max_tokens=300)
+            logger.info("LLM not provided to PatientAgent, loading the local clinical model.")
+            self.llm = load_restricted_clinical_model(temperature=0.6, max_tokens=300)
 
+        profile_type = profile.get("profile_type", "NO_DIAGNOSIS_NO_TREATMENT")
+        profile = mask_profile_for_patient(profile, profile_type)
         self.profile = profile
         self.coach_feedback_to_incorporate = None
         self.mentioned_symptoms = set()
@@ -57,8 +60,8 @@ class PatientAgent:
 
         # Get demographic info for personality modeling
         demo = self.profile.get("Context_Fields", {}).get("Patient_Demographics", {})
-        age = demo.get('Age', 50)
-        sex = demo.get('Sex', 'Unknown')
+        age = demo.get("Age", 50)
+        sex = demo.get("Sex", "Unknown")
 
         # Get personality-based communication traits
         self.personality_profile = PatientPersonality.get_personality_traits(age, sex)
@@ -102,29 +105,23 @@ class PatientAgent:
             "role": "system",
             "content": (
                 f"{BASE_SYSTEM_PROMPT}\n\n"
-
                 "**YOUR ROLE:**\n"
                 f"You are {self.patient_persona} seeking medical help.\n"
                 f"Emotional state: {self.emotional_state}\n"
                 f"Communication style: {age_style_desc}\n\n"
-
                 f"{profile_section}\n"
-
                 f"{knowledge_instruction}\n\n"
-
                 "**CRITICAL GROUNDING RULES:**\n"
                 "1. ONLY discuss symptoms listed in your profile above\n"
                 "2. If the doctor asks about symptoms NOT in your profile, say you have not experienced them\n"
                 "3. Do NOT invent new symptoms, test results, or medical history\n"
                 "4. If you do not know a detail (exact duration, specific time), say you are not sure\n"
                 "5. Strictly follow your profile-type knowledge boundaries — see above\n\n"
-
                 "**NATURAL CONVERSATION BEHAVIOUR:**\n"
                 "- **Turn 1-2**: Share only your main concern briefly, with some initial hesitation\n"
                 "- **Turn 3-5**: When asked, reveal 1-2 additional symptoms gradually\n"
                 "- **Turn 6+**: Feel more comfortable — less hesitation, more direct answers\n"
                 f"{conclusion_behaviour}"
-
                 "**COMMUNICATION STYLE — VARY YOUR RESPONSES:**\n"
                 "- Use everyday language initially: 'my chest hurts', 'hard to breathe'\n"
                 "- Mirror the doctor's medical terms when they use them\n"
@@ -134,7 +131,7 @@ class PatientAgent:
                 "- Express uncertainty contextually: 'I think...', 'Maybe...', 'I am not sure if...'\n"
                 "- Do not ask 'Should I be worried?' repeatedly — vary your concerns\n"
                 "- Keep responses brief and natural (1-3 sentences typically)\n"
-            )
+            ),
         }
 
     # ── Profile-type helpers ────────────────────────────────────────────────
@@ -142,8 +139,7 @@ class PatientAgent:
     def _get_profile_knowledge_instruction(self) -> str:
         """Return the knowledge-boundary instruction block for this profile type."""
         knowledge = PATIENT_PROFILE_TYPE_KNOWLEDGE.get(
-            self.profile_type,
-            PATIENT_PROFILE_TYPE_KNOWLEDGE["NO_DIAGNOSIS_NO_TREATMENT"]
+            self.profile_type, PATIENT_PROFILE_TYPE_KNOWLEDGE["NO_DIAGNOSIS_NO_TREATMENT"]
         )
         return knowledge["system_instruction"]
 
@@ -178,8 +174,7 @@ class PatientAgent:
                 treatment = t.get("treatment", "")
                 meds = t.get("medications", [])
                 med_names = [
-                    m.get("name", "") for m in meds
-                    if isinstance(m, dict) and m.get("name")
+                    m.get("name", "") for m in meds if isinstance(m, dict) and m.get("name")
                 ]
                 parts = []
                 if procedure and procedure != "not provided":
@@ -203,7 +198,9 @@ class PatientAgent:
         elif age < 60:
             return "Balanced and clear, practical communication, experienced with healthcare"
         else:
-            return "Respectful and detailed, may have some recall hesitation, values doctor's guidance"
+            return (
+                "Respectful and detailed, may have some recall hesitation, values doctor's guidance"
+            )
 
     def _prepare_gradual_disclosure(self) -> list:
         symptoms_list = self.profile.get("Core_Fields", {}).get("Symptoms", [])
@@ -211,7 +208,7 @@ class PatientAgent:
 
         for sym in symptoms_list:
             if isinstance(sym, dict):
-                desc = sym.get('description', '').strip()
+                desc = sym.get("description", "").strip()
                 if desc:
                     symptoms.append(desc.lower())
             elif isinstance(sym, str) and sym.strip():
@@ -221,7 +218,7 @@ class PatientAgent:
         secondary_symptoms = []
 
         for symptom in symptoms:
-            if any(term in symptom for term in ['pain', 'hurt', 'breath', 'chest']):
+            if any(term in symptom for term in ["pain", "hurt", "breath", "chest"]):
                 priority_symptoms.append(symptom)
             else:
                 secondary_symptoms.append(symptom)
@@ -230,8 +227,8 @@ class PatientAgent:
 
     def _create_patient_persona(self) -> str:
         demo = self.profile.get("Context_Fields", {}).get("Patient_Demographics", {})
-        age = demo.get('Age', 0)
-        sex = demo.get('Sex', 'person')
+        age = demo.get("Age", 0)
+        sex = demo.get("Sex", "person")
 
         if age < 30:
             age_desc = "young adult"
@@ -244,7 +241,7 @@ class PatientAgent:
 
     def _determine_personality_traits(self) -> str:
         demo = self.profile.get("Context_Fields", {}).get("Patient_Demographics", {})
-        age = demo.get('Age', 0)
+        age = demo.get("Age", 0)
 
         if age < 30:
             base_traits = ["somewhat anxious about health", "asks direct questions"]
@@ -273,7 +270,9 @@ class PatientAgent:
         return f"Age: {demo.get('Age', 'N/A')}, Sex: {demo.get('Sex', 'N/A')}"
 
     def _get_chief_complaint(self, profile: dict) -> str:
-        return profile.get("Additional_Context", {}).get("Chief_Complaint", "Not specified in profile.")
+        return profile.get("Additional_Context", {}).get(
+            "Chief_Complaint", "Not specified in profile."
+        )
 
     def _get_medical_history(self, profile: dict) -> str:
         history_data = profile.get("Context_Fields", {}).get("Medical_History", {})
@@ -304,16 +303,22 @@ class PatientAgent:
         symptom_details = []
         for sym_item in symptoms_list:
             if isinstance(sym_item, dict):
-                desc = sym_item.get('description')
+                desc = sym_item.get("description")
                 if not desc:
                     continue
                 symptom_details.append(desc)
             elif isinstance(sym_item, str):
                 symptom_details.append(sym_item)
-        return "; ".join(symptom_details) if symptom_details else "No specific symptoms listed in profile to discuss."
+        return (
+            "; ".join(symptom_details)
+            if symptom_details
+            else "No specific symptoms listed in profile to discuss."
+        )
 
     def _get_symptoms_for_turn(self) -> list:
-        available_symptoms = [s for s in self.symptoms_to_disclose if s not in self.mentioned_symptoms]
+        available_symptoms = [
+            s for s in self.symptoms_to_disclose if s not in self.mentioned_symptoms
+        ]
 
         if self.conversation_turn <= 2:
             return available_symptoms[:1] if available_symptoms else []
@@ -329,34 +334,62 @@ class PatientAgent:
 
         llm_messages = [self.system_message]
         for message in conversation_history:
-            if message['role'].lower() == 'patient':
-                llm_messages.append({'role': 'assistant', 'content': message['content']})
-            elif message['role'].lower() == 'doctor':
-                llm_messages.append({'role': 'user', 'content': message['content']})
+            if message["role"].lower() == "patient":
+                llm_messages.append({"role": "assistant", "content": message["content"]})
+            elif message["role"].lower() == "doctor":
+                llm_messages.append({"role": "user", "content": message["content"]})
 
         if self.coach_feedback_to_incorporate:
-            llm_messages.append({'role': 'user', 'content': f"Feedback for improvement: {self.coach_feedback_to_incorporate}"})
+            llm_messages.append(
+                {
+                    "role": "user",
+                    "content": f"Feedback for improvement: {self.coach_feedback_to_incorporate}",
+                }
+            )
             self.coach_feedback_to_incorporate = None
 
         # Determine what symptoms can be mentioned this turn (gradual disclosure)
         symptoms_to_mention = self._get_symptoms_for_turn()
 
-        if conversation_history and conversation_history[-1]['role'].lower() == 'doctor':
-            last_doctor_message = conversation_history[-1]['content']
+        if conversation_history and conversation_history[-1]["role"].lower() == "doctor":
+            last_doctor_message = conversation_history[-1]["content"]
             doctor_lower = last_doctor_message.lower()
 
             # Check if doctor is asking about symptoms
-            asking_about_symptoms = any(phrase in doctor_lower for phrase in [
-                "tell me", "describe", "any other", "what else", "symptoms", "how do you feel",
-                "experiencing", "happening"
-            ])
+            asking_about_symptoms = any(
+                phrase in doctor_lower
+                for phrase in [
+                    "tell me",
+                    "describe",
+                    "any other",
+                    "what else",
+                    "symptoms",
+                    "how do you feel",
+                    "experiencing",
+                    "happening",
+                ]
+            )
 
             # Detect if doctor is giving assessment/conclusion
-            doctor_concluding = any(phrase in doctor_lower for phrase in [
-                "based on", "from what you've told me", "my assessment", "sounds like",
-                "appears to be", "likely", "recommend", "suggest", "treatment", "next steps",
-                "what i think", "my recommendation", "you should", "i'd advise"
-            ])
+            doctor_concluding = any(
+                phrase in doctor_lower
+                for phrase in [
+                    "based on",
+                    "from what you've told me",
+                    "my assessment",
+                    "sounds like",
+                    "appears to be",
+                    "likely",
+                    "recommend",
+                    "suggest",
+                    "treatment",
+                    "next steps",
+                    "what i think",
+                    "my recommendation",
+                    "you should",
+                    "i'd advise",
+                ]
+            )
 
             # Turn-based guidance for natural conversation with personality
             if doctor_concluding:
@@ -380,7 +413,9 @@ class PatientAgent:
             elif self.conversation_turn <= 5:
                 turn_guidance = "Share more details when asked. Hesitate only when genuinely uncertain, not every response."
             else:
-                turn_guidance = "Feel comfortable — be more direct and less hesitant. Answer questions clearly."
+                turn_guidance = (
+                    "Feel comfortable — be more direct and less hesitant. Answer questions clearly."
+                )
 
             # Symptom disclosure hint
             symptom_hint = ""
@@ -392,24 +427,25 @@ class PatientAgent:
             if self.conversation_turn <= 2:
                 hesitation_guidance = "You may use a brief hesitation if uncertain."
             elif self.conversation_turn > 5:
-                hesitation_guidance = "You're more comfortable now — answer more directly, less hesitation."
+                hesitation_guidance = (
+                    "You're more comfortable now — answer more directly, less hesitation."
+                )
             else:
-                hesitation_guidance = "Use hesitation only when genuinely uncertain about the answer."
+                hesitation_guidance = (
+                    "Use hesitation only when genuinely uncertain about the answer."
+                )
 
             # Profile-type disclosure reminder (injected every turn)
             profile_knowledge = PATIENT_PROFILE_TYPE_KNOWLEDGE.get(
-                self.profile_type,
-                PATIENT_PROFILE_TYPE_KNOWLEDGE["NO_DIAGNOSIS_NO_TREATMENT"]
+                self.profile_type, PATIENT_PROFILE_TYPE_KNOWLEDGE["NO_DIAGNOSIS_NO_TREATMENT"]
             )
-            disclosure_reminder = (
-                f"\n⚠️ PROFILE REMINDER ({self.profile_type}): {profile_knowledge['disclosure_rules']}\n"
-            )
+            disclosure_reminder = f"\n⚠️ PROFILE REMINDER ({self.profile_type}): {profile_knowledge['disclosure_rules']}\n"
 
             # Check repetition stats
             repetition_stats = self.repetition_tracker.get_usage_stats()
             repetition_warning = ""
-            if repetition_stats['phrase_counts']:
-                overused = [p for p, c in repetition_stats['phrase_counts'].items() if c >= 2]
+            if repetition_stats["phrase_counts"]:
+                overused = [p for p, c in repetition_stats["phrase_counts"].items() if c >= 2]
                 if overused:
                     repetition_warning = (
                         f"\n⚠️ CRITICAL: You've started responses with 'Um...' or 'Well...' "
@@ -418,45 +454,38 @@ class PatientAgent:
 
             user_prompt_for_next_turn = (
                 f"Turn {self.conversation_turn}\n"
-                f"Doctor said: \"{last_doctor_message}\"\n"
+                f'Doctor said: "{last_doctor_message}"\n'
                 f"Guidance: {turn_guidance}\n"
                 f"{hesitation_guidance}\n"
                 f"{symptom_hint}\n"
                 f"{disclosure_reminder}"
                 f"{repetition_warning}\n"
-
                 "**CRITICAL ANTI-REPETITION RULES:**\n"
                 "- DO NOT start with 'Um...', 'Well...', or 'Uh...'\n"
                 "- DO NOT ask 'Should I be worried?' or 'Is this serious?' again\n"
                 "- Answer DIRECTLY if doctor asks a clear question\n"
                 "- Check your last 3 responses — use COMPLETELY different openings\n\n"
-
                 "**Response guidelines:**\n"
                 "1. Keep response brief and natural (1-3 sentences)\n"
                 "2. START DIFFERENTLY than your last 3 responses\n"
                 "3. Use everyday language, but mirror doctor's medical terms when appropriate\n"
                 "4. ONLY discuss symptoms from your profile\n"
                 "5. Follow your profile-type knowledge boundaries (see system instructions above)\n\n"
-
-                + create_varied_prompt_examples('patient') +
-
-                "\nPatient's response:"
+                + create_varied_prompt_examples("patient")
+                + "\nPatient's response:"
             )
             llm_messages.append({"role": "user", "content": user_prompt_for_next_turn})
         else:
             # Opening response
             profile_knowledge = PATIENT_PROFILE_TYPE_KNOWLEDGE.get(
-                self.profile_type,
-                PATIENT_PROFILE_TYPE_KNOWLEDGE["NO_DIAGNOSIS_NO_TREATMENT"]
+                self.profile_type, PATIENT_PROFILE_TYPE_KNOWLEDGE["NO_DIAGNOSIS_NO_TREATMENT"]
             )
             user_prompt_for_next_turn = (
                 f"Turn {self.conversation_turn} — Starting consultation\n"
                 "Share only your main concern briefly. Be somewhat hesitant initially, but don't start with 'Um...'.\n"
                 f"⚠️ PROFILE REMINDER ({self.profile_type}): {profile_knowledge['disclosure_rules']}\n\n"
-
-                + create_varied_prompt_examples('patient') +
-
-                "\nPatient's response:"
+                + create_varied_prompt_examples("patient")
+                + "\nPatient's response:"
             )
             llm_messages.append({"role": "user", "content": user_prompt_for_next_turn})
 
@@ -465,7 +494,9 @@ class PatientAgent:
         # Track this response for repetition detection
         self.repetition_tracker.track_response(response_content)
 
-        logger.info(f"[Patient] Turn {self.conversation_turn} ({self.profile_type}): {response_content[:80]}...")
+        logger.info(
+            f"[Patient] Turn {self.conversation_turn} ({self.profile_type}): {response_content[:80]}..."
+        )
         return response_content
 
     def update_prompt(self, additional_instructions: str):

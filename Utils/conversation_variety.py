@@ -112,6 +112,7 @@ PATIENT_CLARIFICATION_REQUESTS = [
 # PERSONALITY-BASED VARIATIONS
 # ============================================================================
 
+
 class PatientPersonality:
     """Patient personality profiles that influence communication style"""
 
@@ -150,25 +151,26 @@ class PatientPersonality:
             return {
                 "filler_words": ["like", "kind of", "sort of", "honestly"],
                 "intensity": ["really", "super", "pretty"],
-                "casual_phrases": ["I've been feeling pretty rough", "It's been rough"]
+                "casual_phrases": ["I've been feeling pretty rough", "It's been rough"],
             }
         elif age < 60:
             return {
                 "filler_words": ["you know", "I mean"],
                 "intensity": ["quite", "rather", "very"],
-                "casual_phrases": ["I haven't been feeling well", "I'm not feeling great"]
+                "casual_phrases": ["I haven't been feeling well", "I'm not feeling great"],
             }
         else:  # 60+
             return {
                 "filler_words": ["well", "you see"],
                 "intensity": ["quite", "rather"],
-                "casual_phrases": ["I've been under the weather", "I'm not feeling myself"]
+                "casual_phrases": ["I've been under the weather", "I'm not feeling myself"],
             }
 
 
 # ============================================================================
 # RESPONSE SELECTION FUNCTIONS
 # ============================================================================
+
 
 def get_doctor_acknowledgment(skip_probability: float = 0.3) -> str:
     """
@@ -234,6 +236,7 @@ def should_use_filler_words(turn_number: int, personality_traits: dict) -> bool:
 # CONVERSATION DYNAMICS
 # ============================================================================
 
+
 def should_doctor_summarize(turn_count: int, symptoms_discussed: int) -> bool:
     """Determine if doctor should summarize findings"""
     # Summarize in synthesis phase if enough symptoms discussed
@@ -262,7 +265,7 @@ def build_natural_response(
     add_empathy: bool = False,
     add_transition: bool = False,
     is_patient: bool = False,
-    is_uncertain: bool = False
+    is_uncertain: bool = False,
 ) -> str:
     """
     Build a natural-sounding response with varied elements.
@@ -356,7 +359,7 @@ SYMPTOM_FOLLOW_UP_QUESTIONS = {
         "When does it happen - standing up, turning your head?",
         "How long do the episodes last?",
         "Any nausea or vomiting with it?",
-    ]
+    ],
 }
 
 
@@ -382,10 +385,11 @@ def get_symptom_follow_up_question(symptom_description: str) -> str:
 # FEW-SHOT EXAMPLES FOR VARIED RESPONSES
 # ============================================================================
 
+
 def create_varied_prompt_examples(agent_type: str) -> str:
     """Create few-shot examples showing varied responses"""
 
-    if agent_type == 'doctor':
+    if agent_type == "doctor":
         return """
 **Examples of VARIED doctor responses (use these as inspiration, not templates):**
 

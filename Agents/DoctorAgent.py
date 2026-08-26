@@ -1,16 +1,46 @@
 import logging
 import random
-from Utils.llms_utils import load_gpt_model, chat_generate
+from Utils.llms_utils import chat_generate, load_restricted_clinical_model
 from Utils.bias_aware_prompts import BASE_SYSTEM_PROMPT, PATIENT_PROFILE_TYPE_KNOWLEDGE
-from Utils.conversation_variety import should_doctor_summarize, should_doctor_explain_reasoning, get_symptom_follow_up_question, DOCTOR_CLINICAL_REASONING, DOCTOR_EDUCATIONAL_PHRASES, create_varied_prompt_examples
+from Utils.conversation_variety import (
+    should_doctor_summarize,
+    should_doctor_explain_reasoning,
+    get_symptom_follow_up_question,
+    DOCTOR_CLINICAL_REASONING,
+    DOCTOR_EDUCATIONAL_PHRASES,
+    create_varied_prompt_examples,
+)
 from Utils.repetition_filter import RepetitionTracker, detect_symptom_repetition
+from meddial.knowledge import DoctorContext, build_doctor_context
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 class DoctorAgent:
-    def __init__(self, patient_profile: dict = None):
-        self.llm = load_gpt_model(temperature=0.5, max_tokens=300)  # Increased for more natural variation
+    def __init__(
+        self,
+        patient_profile: dict = None,
+        llm=None,
+        doctor_context: DoctorContext | dict | None = None,
+    ):
+        """Create a doctor with an explicitly restricted initial context.
+
+        ``patient_profile`` is retained for compatibility, but it is always
+        reduced to a doctor context before prompt construction.  Supplying an
+        injected ``llm`` makes the agent provider-independent and testable.
+        """
+        self.llm = llm or load_restricted_clinical_model(temperature=0.5, max_tokens=300)
+        source = doctor_context if doctor_context is not None else patient_profile
+        if isinstance(source, DoctorContext):
+            patient_profile = source.as_dict()
+        elif isinstance(source, dict) and source.get("knowledge_scope") == "doctor_initial_context":
+            patient_profile = source
+        elif isinstance(source, dict):
+            profile_type = source.get("profile_type", "NO_DIAGNOSIS_NO_TREATMENT")
+            patient_profile = build_doctor_context(source, profile_type).as_dict()
+        else:
+            patient_profile = {}
         self.patient_profile = patient_profile
         self.coach_feedback_to_incorporate = None
         self.conversation_phase = "opening"
@@ -34,28 +64,21 @@ class DoctorAgent:
                     f"Sex: {demo.get('Sex', 'Not provided')}"
                 )
 
-            # Check what data is available
-            if patient_profile.get("Core_Fields", {}).get("Symptoms"):
-                available_data_summary.append("symptoms reported in profile")
-            if patient_profile.get("Context_Fields", {}).get("Medical_History"):
-                available_data_summary.append("medical history")
-            if patient_profile.get("Context_Fields", {}).get("Allergies"):
-                available_data_summary.append("allergy information")
+            available_data_summary.append("demographics only before conversation")
 
-        # Extract key symptoms for guidance
+        # Clinical facts are learned from conversation, never from the SCR.
         self.key_symptoms = []
-        if patient_profile:
-            symptoms = patient_profile.get("Core_Fields", {}).get("Symptoms", [])
-            for symptom in symptoms:
-                if isinstance(symptom, dict):
-                    desc = symptom.get("description", "").strip()
-                    if desc:
-                        self.key_symptoms.append(desc.lower())
 
-        data_available = ", ".join(available_data_summary) if available_data_summary else "limited patient data"
+        data_available = (
+            ", ".join(available_data_summary) if available_data_summary else "limited patient data"
+        )
 
         # Profile-type context: what the patient already knows when they arrive
-        profile_type = patient_profile.get("profile_type", "NO_DIAGNOSIS_NO_TREATMENT") if patient_profile else "NO_DIAGNOSIS_NO_TREATMENT"
+        profile_type = (
+            patient_profile.get("profile_type", "NO_DIAGNOSIS_NO_TREATMENT")
+            if patient_profile
+            else "NO_DIAGNOSIS_NO_TREATMENT"
+        )
         self.profile_type = profile_type
         profile_knowledge = PATIENT_PROFILE_TYPE_KNOWLEDGE.get(
             profile_type, PATIENT_PROFILE_TYPE_KNOWLEDGE["NO_DIAGNOSIS_NO_TREATMENT"]
@@ -66,15 +89,12 @@ class DoctorAgent:
             "role": "system",
             "content": (
                 f"{BASE_SYSTEM_PROMPT}\n\n"
-
                 "**YOUR ROLE:**\n"
-                f"You are a primary care physician conducting a consultation for a patient with a light, common medical issue.\n"
+                f"You are a clinician conducting a simulated consultation from a research cohort.\n"
                 f"Patient demographics: {demographics_info}\n"
                 f"Available patient data: {data_available}\n\n"
-
                 f"{profile_type_guidance}\n\n"
-
-                "**CONSULTATION APPROACH FOR LIGHT CASES:**\n"
+                "**CONSULTATION APPROACH:**\n"
                 "1. Start with a warm greeting and open-ended question (e.g., 'How have you been feeling lately?')\n"
                 "2. Listen to patient's chief complaint and explore key symptoms with focused follow-up questions\n"
                 "3. PRIORITIZE the most important questions - quality over quantity\n"
@@ -82,8 +102,7 @@ class DoctorAgent:
                 "5. Show empathy naturally and contextually (not every turn)\n"
                 "6. Provide education and clinical reasoning - explain WHY you're asking certain questions\n"
                 "7. Occasionally summarize what you've heard to show active listening\n"
-                "8. Keep questions appropriate for a light, common condition (not severe/ICU-level)\n\n"
-
+                "8. Calibrate urgency to facts revealed in the conversation; the cohort label is not a diagnosis\n\n"
                 "**COMMUNICATION GUIDELINES - NATURAL CONVERSATION:**\n"
                 "- Vary your response style - don't start every response with 'Thank you' or 'I understand'\n"
                 "- Sometimes acknowledge briefly ('I see', 'Okay'), sometimes just continue directly\n"
@@ -93,29 +112,25 @@ class DoctorAgent:
                 "- Use transitional phrases: 'Let me ask about...', 'Tell me more about...'\n"
                 "- Occasionally explain your clinical thinking: 'Based on what you're describing...'\n"
                 "- Provide brief education when appropriate: 'What often happens with this is...'\n\n"
-
                 "**PROVIDE CLINICAL VALUE:**\n"
                 "- Explain likely mechanisms or causes in simple terms when appropriate\n"
                 "- Educate about warning signs to watch for\n"
-                "- Offer reassurance when findings suggest common, benign issues\n"
+                "- Offer reassurance only when the conversation supports it\n"
                 "- Provide practical self-care advice beyond just 'see your doctor'\n"
                 "- Help patient understand connections between symptoms\n\n"
-
                 "**AVOID REPETITION:**\n"
                 "- Don't ask about the same symptom multiple times unless seeking clarification\n"
                 "- Vary your phrasing and approach\n"
                 "- Don't repeat the same symptoms back to the patient every turn\n"
                 "- Progress the conversation forward\n\n"
-
                 "**CRITICAL GROUNDING RULES:**\n"
                 "- Base your questions and assessment ONLY on what the patient tells you in the conversation\n"
                 "- Do not assume or invent symptoms, test results, or history not mentioned\n"
                 "- If you're unsure about something, ask the patient directly\n"
-                "- Do not escalate a light case to severe diagnoses without strong evidence from conversation\n"
-                "- Stay focused on light, common conditions (cough, sore throat, headache, mild fever, etc.)\n"
-            )
+                "- Do not infer facts from the hidden clinical reference or cohort-selection process\n"
+                "- Treat urgent warning signs seriously if the patient actually reveals them\n"
+            ),
         }
-
 
     def _build_profile_type_guidance(self, profile_type: str, profile_knowledge: dict) -> str:
         """
@@ -172,13 +187,16 @@ class DoctorAgent:
     def _detect_patient_emotion(self, patient_message: str) -> str:
         message_lower = patient_message.lower()
 
-        if any(word in message_lower for word in ['worried', 'scared', 'afraid', 'concerned', 'anxious']):
+        if any(
+            word in message_lower
+            for word in ["worried", "scared", "afraid", "concerned", "anxious"]
+        ):
             return "anxious"
-        elif any(word in message_lower for word in ['frustrated', 'annoyed', 'tired of']):
+        elif any(word in message_lower for word in ["frustrated", "annoyed", "tired of"]):
             return "frustrated"
-        elif any(word in message_lower for word in ['hurts', 'painful', 'terrible', 'awful']):
+        elif any(word in message_lower for word in ["hurts", "painful", "terrible", "awful"]):
             return "in_pain"
-        elif any(word in message_lower for word in ['confused', 'don\'t understand', 'unclear']):
+        elif any(word in message_lower for word in ["confused", "don't understand", "unclear"]):
             return "confused"
         else:
             return "neutral"
@@ -198,8 +216,9 @@ class DoctorAgent:
             return
 
         recent_patient_responses = [
-            msg['content'].lower() for msg in conversation_history[-4:]
-            if msg.get('role', '').lower() == 'patient'
+            msg["content"].lower()
+            for msg in conversation_history[-4:]
+            if msg.get("role", "").lower() == "patient"
         ]
 
         for response in recent_patient_responses:
@@ -213,13 +232,18 @@ class DoctorAgent:
         llm_messages = [self.system_message]
 
         for message in conversation_history:
-            if message['role'].lower() == 'doctor':
-                llm_messages.append({'role': 'assistant', 'content': message['content']})
-            elif message['role'].lower() == 'patient':
-                llm_messages.append({'role': 'user', 'content': message['content']})
+            if message["role"].lower() == "doctor":
+                llm_messages.append({"role": "assistant", "content": message["content"]})
+            elif message["role"].lower() == "patient":
+                llm_messages.append({"role": "user", "content": message["content"]})
 
         if self.coach_feedback_to_incorporate:
-            llm_messages.append({'role': 'user', 'content': f"Feedback for improvement: {self.coach_feedback_to_incorporate}"})
+            llm_messages.append(
+                {
+                    "role": "user",
+                    "content": f"Feedback for improvement: {self.coach_feedback_to_incorporate}",
+                }
+            )
             self.coach_feedback_to_incorporate = None
 
         # Update conversation tracking
@@ -227,13 +251,15 @@ class DoctorAgent:
         self._track_clinical_findings(conversation_history)
 
         # Detect patient emotion for empathetic responses
-        if conversation_history and conversation_history[-1].get('role', '').lower() == 'patient':
-            last_patient_message = conversation_history[-1]['content']
+        if conversation_history and conversation_history[-1].get("role", "").lower() == "patient":
+            last_patient_message = conversation_history[-1]["content"]
             self.last_patient_emotion = self._detect_patient_emotion(last_patient_message)
 
         # Phase-specific guidance for natural conversation flow with smooth transitions
         if self.conversation_phase == "opening":
-            phase_guidance = "Greet patient warmly and ask open-ended question about their chief concern."
+            phase_guidance = (
+                "Greet patient warmly and ask open-ended question about their chief concern."
+            )
 
         elif self.conversation_phase == "exploration":
             phase_guidance = "Explore symptoms in depth with FOCUSED follow-up questions (severity, duration, triggers). Prioritize the most relevant questions."
@@ -254,9 +280,12 @@ class DoctorAgent:
             already_concluded = False
             if conversation_history:
                 for msg in conversation_history:
-                    if msg.get('role', '').lower() == 'doctor':
-                        content_lower = msg['content'].lower()
-                        if any(keyword in content_lower for keyword in ['based on', 'sounds like', 'recommend', 'my assessment']):
+                    if msg.get("role", "").lower() == "doctor":
+                        content_lower = msg["content"].lower()
+                        if any(
+                            keyword in content_lower
+                            for keyword in ["based on", "sounds like", "recommend", "my assessment"]
+                        ):
                             already_concluded = True
                             break
 
@@ -286,14 +315,20 @@ class DoctorAgent:
         # Get repetition stats for feedback
         repetition_stats = self.repetition_tracker.get_usage_stats()
         repetition_warning = ""
-        if repetition_stats['phrase_counts']:
+        if repetition_stats["phrase_counts"]:
             # Find most overused phrases
-            overused = [pattern for pattern, count in repetition_stats['phrase_counts'].items() if count >= 3]
+            overused = [
+                pattern
+                for pattern, count in repetition_stats["phrase_counts"].items()
+                if count >= 3
+            ]
             if overused:
-                repetition_warning = f"\n⚠️ CRITICAL: You've overused these phrase patterns - COMPLETELY AVOID THEM:\n" + \
-                                   "- Starting with 'Thank you for...'\n" + \
-                                   "- Starting with 'I understand...'\n" + \
-                                   "Use completely different openings!\n"
+                repetition_warning = (
+                    f"\n⚠️ CRITICAL: You've overused these phrase patterns - COMPLETELY AVOID THEM:\n"
+                    + "- Starting with 'Thank you for...'\n"
+                    + "- Starting with 'I understand...'\n"
+                    + "Use completely different openings!\n"
+                )
 
         # Enhanced prompt with variety, clinical depth, AND anti-repetition
         user_prompt_for_next_turn = (
@@ -302,13 +337,11 @@ class DoctorAgent:
             f"{symptom_hint}\n"
             f"{repetition_warning}"
             f"{symptom_warning}\n"
-
             "**CRITICAL ANTI-REPETITION RULES:**\n"
             "- NEVER start with 'Thank you for sharing/letting me know/telling me'\n"
             "- NEVER start with 'I understand' or 'I'm sorry you're experiencing'\n"
             "- NEVER repeat the same symptoms back to the patient\n"
             "- Check your last 3 responses - use COMPLETELY different openings\n\n"
-
             "**Response guidelines:**\n"
             "1. START DIFFERENTLY than your last 3 responses\n"
             "   - Options: 'I see', 'Okay', 'Let me ask about...', 'Tell me more about...', 'Got it', or dive straight into question\n"
@@ -317,10 +350,8 @@ class DoctorAgent:
             "4. Build on previous answers without repeating them\n"
             "5. If in synthesis/conclusion phase, explain clinical reasoning\n"
             "6. Provide practical value - education, reassurance, or actionable advice\n\n"
-
-            + create_varied_prompt_examples('doctor') +
-
-            "\nDoctor's response:"
+            + create_varied_prompt_examples("doctor")
+            + "\nDoctor's response:"
         )
 
         llm_messages.append({"role": "user", "content": user_prompt_for_next_turn})
@@ -330,9 +361,11 @@ class DoctorAgent:
         # Track this response for repetition detection
         self.repetition_tracker.track_response(response_content)
 
-        logger.info(f"[Doctor] Turn {self.conversation_turn} ({self.conversation_phase}): {response_content[:80]}...")
+        logger.info(
+            f"[Doctor] Turn {self.conversation_turn} ({self.conversation_phase}): {response_content[:80]}..."
+        )
         return response_content
-    
+
     def update_prompt(self, additional_instructions: str):
         self.coach_feedback_to_incorporate = additional_instructions
         logger.info("[Doctor] Coach feedback stored for next response.")

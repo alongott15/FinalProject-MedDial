@@ -1,64 +1,127 @@
-from pydantic import BaseModel # For Pydantic V2, no change needed here. For V1, it's also just BaseModel
-from typing import List, Optional # Optional can be useful
+"""Pydantic v2 models for the Structured Clinical Reference (SCR).
 
-# Core Fields
-class Symptom(BaseModel):
+``GTMF`` remains an alias so old imports and saved artifacts continue to load.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class MedDialModel(BaseModel):
+    model_config = ConfigDict(extra="allow", validate_assignment=True)
+
+
+class EvidenceProvenance(MedDialModel):
+    source_note_id: str = "not provided"
+    chunk_index: int | None = None
+    character_start: int | None = None
+    character_end: int | None = None
+    excerpt: str | None = None
+    extractor: str | None = None
+    model: str | None = None
+    extraction_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Symptom(MedDialModel):
     description: str
-    onset: str = "not provided" # Added default
-    duration: str = "not provided" # Added default
-    severity: str = "not provided" # Added default
+    onset: str = "not provided"
+    duration: str = "not provided"
+    severity: str = "not provided"
+    evidence: list[EvidenceProvenance] = Field(default_factory=list)
 
-class Diagnosis(BaseModel):
+
+class Diagnosis(MedDialModel):
     primary: str
-    notes: str = "not provided" # Added default
+    notes: str = "not provided"
+    evidence: list[EvidenceProvenance] = Field(default_factory=list)
 
-class Medication(BaseModel):
+
+class Medication(MedDialModel):
     name: str
-    purpose: str = "not provided" # Added default
-    dosage: str = "not provided" # Added default
-    frequency: str = "not provided" # Added default
+    purpose: str = "not provided"
+    dosage: str = "not provided"
+    frequency: str = "not provided"
+    evidence: list[EvidenceProvenance] = Field(default_factory=list)
 
-class TreatmentOption(BaseModel):
-    procedure: str
-    details: str = "not provided" # Added default
-    treatment: str = "not provided" # Added default
-    medications: List[Medication] = []
 
-class CoreFields(BaseModel):
-    Symptoms: List[Symptom] = []
-    Diagnoses: List[Diagnosis] = []
-    Treatment_Options: List[TreatmentOption] = []
+class TreatmentOption(MedDialModel):
+    procedure: str = "not provided"
+    details: str = "not provided"
+    treatment: str = "not provided"
+    medications: list[Medication] = Field(default_factory=list)
+    evidence: list[EvidenceProvenance] = Field(default_factory=list)
 
-class PatientDemographics(BaseModel):
-    Date_of_Birth: str = "not provided" # Added default
-    Age: int = 0 # Added default
-    Sex: str = "not provided" # Added default
-    Religion: str = "not provided" # Added default
-    Marital_Status: str = "not provided" # Added default
-    Ethnicity: str = "not provided" # Added default
-    Insurance: str = "not provided" # Added default
-    Admission_Type: str = "not provided" # Added default
-    Admission_Date: str = "not provided" # Added default
-    Discharge_Date: str = "not provided" # Added default
 
-class MedicalHistory(BaseModel):
-    Past_Medical_History: str = "not provided" # Added default
+class CoreFields(MedDialModel):
+    Symptoms: list[Symptom] = Field(default_factory=list)
+    Diagnoses: list[Diagnosis] = Field(default_factory=list)
+    Treatment_Options: list[TreatmentOption] = Field(default_factory=list)
 
-class ContextFields(BaseModel):
-    Patient_Demographics: PatientDemographics # Will default if not provided due to PatientDemographics defaults
-    Medical_History: MedicalHistory # Will default
-    Allergies: List[str] = []
-    Current_Medications: List[Medication] = []
-    Discharge_Medications: List[Medication] = []
 
-class AdditionalContext(BaseModel):
-    Chief_Complaint: str = "not provided" # Added default
+class PatientDemographics(MedDialModel):
+    Date_of_Birth: str = "not provided"
+    Age: int = 0
+    Sex: str = "not provided"
+    Religion: str = "not provided"
+    Marital_Status: str = "not provided"
+    Ethnicity: str = "not provided"
+    Insurance: str = "not provided"
+    Admission_Type: str = "not provided"
+    Admission_Date: str = "not provided"
+    Discharge_Date: str = "not provided"
 
-# The complete GTMF model
-class GTMF(BaseModel):
+
+class MedicalHistory(MedDialModel):
+    Past_Medical_History: str = "not provided"
+    evidence: list[EvidenceProvenance] = Field(default_factory=list)
+
+
+class ContextFields(MedDialModel):
+    Patient_Demographics: PatientDemographics = Field(default_factory=PatientDemographics)
+    Medical_History: MedicalHistory = Field(default_factory=MedicalHistory)
+    Allergies: list[str] = Field(default_factory=list)
+    Current_Medications: list[Medication] = Field(default_factory=list)
+    Discharge_Medications: list[Medication] = Field(default_factory=list)
+
+
+class AdditionalContext(MedDialModel):
+    Chief_Complaint: str = "not provided"
+    evidence: list[EvidenceProvenance] = Field(default_factory=list)
+
+
+class StructuredClinicalReference(MedDialModel):
+    """Validated clinical reference extracted from an EHR note."""
+
+    schema_name: str = "Structured Clinical Reference"
+    schema_version: str = "1.0"
+    extraction_status: str = "VALID"
     row_id: int = 0
     subject_id: int = 0
     hadm_id: int = 0
-    Core_Fields: CoreFields
-    Context_Fields: ContextFields
-    Additional_Context: AdditionalContext
+    Core_Fields: CoreFields = Field(default_factory=CoreFields)
+    Context_Fields: ContextFields = Field(default_factory=ContextFields)
+    Additional_Context: AdditionalContext = Field(default_factory=AdditionalContext)
+    reference_evidence: list[EvidenceProvenance] = Field(default_factory=list)
+
+
+SCR = StructuredClinicalReference
+GTMF = StructuredClinicalReference
+
+__all__ = [
+    "AdditionalContext",
+    "ContextFields",
+    "CoreFields",
+    "Diagnosis",
+    "EvidenceProvenance",
+    "GTMF",
+    "MedicalHistory",
+    "Medication",
+    "PatientDemographics",
+    "SCR",
+    "StructuredClinicalReference",
+    "Symptom",
+    "TreatmentOption",
+]

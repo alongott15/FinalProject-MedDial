@@ -1,0 +1,9 @@
+{
+  "name": "cmpb-knowledge-controlled",
+  "variant": "knowledge_controlled",
+  "seed": 42,
+  "max_attempts": 1,
+  "max_turns": 30,
+  "profile_types": ["NO_DIAGNOSIS_NO_TREATMENT"],
+  "study_phase": "architecture_ablation"
+}
