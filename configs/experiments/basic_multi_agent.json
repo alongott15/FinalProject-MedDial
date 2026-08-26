@@ -2,6 +2,8 @@
   "name": "cmpb-basic-multi-agent",
   "variant": "basic_multi_agent",
   "seed": 42,
-  "max_attempts": 3,
-  "max_turns": 30
+  "max_attempts": 1,
+  "max_turns": 30,
+  "profile_types": ["NO_DIAGNOSIS_NO_TREATMENT"],
+  "study_phase": "architecture_ablation"
 }

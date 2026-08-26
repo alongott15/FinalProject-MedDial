@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use MedDial, please cite the associated publication and this software."
+title: "MedDial: Knowledge-controlled synthetic clinical dialogue research framework"
+type: software
+authors:
+  - family-names: Gottlib
+    given-names: Alon
+repository-code: "https://github.com/alongott15/FinalProject-MedDial"
+version: 0.3.0
+date-released: 2026-08-26

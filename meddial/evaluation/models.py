@@ -25,7 +25,10 @@ class MetricResult:
     def __post_init__(self) -> None:
         if self.score is not None and not 0.0 <= self.score <= 1.0:
             raise ValueError(f"Metric score must be in [0, 1], got {self.score}")
-        if self.status in {EvaluationStatus.ERROR, EvaluationStatus.UNSCORABLE} and self.score is not None:
+        if (
+            self.status in {EvaluationStatus.ERROR, EvaluationStatus.UNSCORABLE}
+            and self.score is not None
+        ):
             raise ValueError(f"{self.status.value} metric results must not have a score")
 
     @property

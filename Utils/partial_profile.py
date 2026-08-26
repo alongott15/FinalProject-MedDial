@@ -12,5 +12,5 @@ def generate_all_profile_types(full_profile: dict) -> list:
     return [
         generate_partial_profiles(full_profile, "FULL"),
         generate_partial_profiles(full_profile, "NO_DIAGNOSIS"),
-        generate_partial_profiles(full_profile, "NO_DIAGNOSIS_NO_TREATMENT")
+        generate_partial_profiles(full_profile, "NO_DIAGNOSIS_NO_TREATMENT"),
     ]

@@ -16,9 +16,7 @@ from meddial.llm import MockLLMProvider
 
 def test_claim_extraction_failure_is_error_not_perfect_score(clinical_reference):
     extractor = LLMClaimExtractor(MockLLMProvider(["not json"]))
-    context = build_conversation_contexts(
-        clinical_reference, "NO_DIAGNOSIS_NO_TREATMENT"
-    ).evaluator
+    context = build_conversation_contexts(clinical_reference, "NO_DIAGNOSIS_NO_TREATMENT").evaluator
     metric = RoleAwareClinicalFaithfulness(extractor=extractor).evaluate(
         [{"role": "Patient", "content": "I have a cough."}], context
     )
@@ -44,14 +42,12 @@ def test_doctor_claims_are_included_in_factuality(clinical_reference):
         {"role": "Doctor", "content": "Your MRI proved you have a brain tumour."},
         {"role": "Patient", "content": "I understand."},
     ]
-    metric = RoleAwareClinicalFaithfulness(
-        extractor=RuleBasedClaimExtractor()
-    ).evaluate(dialogue, context)
+    metric = RoleAwareClinicalFaithfulness(extractor=RuleBasedClaimExtractor()).evaluate(
+        dialogue, context
+    )
     assert metric.status is EvaluationStatus.FAIL
     assert metric.details["doctor_claim_count"] > 0
-    assert any(
-        claim["role"] == "Doctor" for claim in metric.details["unsupported_claims"]
-    )
+    assert any(claim["role"] == "Doctor" for claim in metric.details["unsupported_claims"])
 
 
 def test_incomplete_dimension_cannot_pass_even_with_high_composite():
@@ -71,9 +67,7 @@ def test_incomplete_dimension_cannot_pass_even_with_high_composite():
 
 
 def test_knowledge_boundary_detects_doctor_hidden_symptom(clinical_reference):
-    context = build_conversation_contexts(
-        clinical_reference, "NO_DIAGNOSIS_NO_TREATMENT"
-    ).evaluator
+    context = build_conversation_contexts(clinical_reference, "NO_DIAGNOSIS_NO_TREATMENT").evaluator
     metric = KnowledgeBoundaryValidator().validate(
         [
             {"role": "Doctor", "content": "Tell me about your dry cough."},
@@ -86,9 +80,7 @@ def test_knowledge_boundary_detects_doctor_hidden_symptom(clinical_reference):
 
 
 def test_diagnostic_hypothesis_is_not_treated_as_reference_leakage(clinical_reference):
-    context = build_conversation_contexts(
-        clinical_reference, "NO_DIAGNOSIS_NO_TREATMENT"
-    ).evaluator
+    context = build_conversation_contexts(clinical_reference, "NO_DIAGNOSIS_NO_TREATMENT").evaluator
     metric = KnowledgeBoundaryValidator().validate(
         [
             {"role": "Doctor", "content": "What brings you in?"},
@@ -117,8 +109,6 @@ def test_structural_validator_known_failures():
 
 def test_legacy_judge_invalid_output_cannot_pass_at_low_threshold(clinical_reference):
     judge = JudgeAgent(llm=MockLLMProvider(["realistic score: 1.0"]), threshold=0.1)
-    result = judge.evaluate_dialogue(
-        [{"role": "Doctor", "content": "Hello"}], clinical_reference
-    )
+    result = judge.evaluate_dialogue([{"role": "Doctor", "content": "Hello"}], clinical_reference)
     assert result["decision"] == "UNSCORABLE"
     assert result["evaluation_status"] == "UNSCORABLE"

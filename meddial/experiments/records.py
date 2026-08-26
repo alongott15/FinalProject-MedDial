@@ -120,8 +120,7 @@ class AttemptStore:
         return [
             record
             for record in self.load_attempts()
-            if record.get("profile_id") == profile_id
-            and record.get("profile_type") == profile_type
+            if record.get("profile_id") == profile_id and record.get("profile_type") == profile_type
         ]
 
 
@@ -153,7 +152,9 @@ class RunManager:
             if latest.get("config_hash") == config.config_hash:
                 run_id = str(latest["run_id"])
         if run_id is None:
-            run_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
+            run_id = (
+                f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
+            )
 
         run_dir = self.runs_root / run_id
         manifest_path = run_dir / "run_manifest.json"

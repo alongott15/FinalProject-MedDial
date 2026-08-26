@@ -27,13 +27,18 @@ dist/
 
 # Protected/local datasets (do not commit MIMIC exports)
 data/
+private/
 MIMIC*/
 NOTEEVENTS.csv
 PATIENTS.csv
 ADMISSIONS.csv
+MTS-Dialog/*.csv
+cohort_review*.json
+*private_manifest*.json
 
 # Generated SCRs, cohort manifests, dialogue runs, and analysis artifacts
-gtmf/*.md
+gtmf/*
+!gtmf/README.md
 gtmf/cohort_manifest.json
 output_dialogue_framework/
 **/runs/

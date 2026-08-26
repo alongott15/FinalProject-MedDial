@@ -16,7 +16,9 @@ Use clear, neutral, and respectful language. Avoid stereotypes and biased assump
 Follow any additional task-specific instructions provided below."""
 
 # GTMF Creation Agent prompt
-GTMF_CREATION_PROMPT = BASE_SYSTEM_PROMPT + """
+GTMF_CREATION_PROMPT = (
+    BASE_SYSTEM_PROMPT
+    + """
 
 Your task is to extract a Structured Clinical Reference (SCR) from the following clinical note and metadata.
 
@@ -27,6 +29,7 @@ If the diagnosis or treatment is not clearly documented, mark it as unknown or l
 Do not infer severity or care setting from cohort membership. Preserve documented warning signs and do not add unsupported acute events.
 
 Output a JSON object following the SCR schema provided."""
+)
 
 # Patient Agent prompt addition (appends to existing patient persona)
 PATIENT_AGENT_ADDITION = """
@@ -59,7 +62,9 @@ If you are uncertain, explain that you are unsure instead of asserting a made-up
 Use simple, jargon-minimized language suitable for a layperson."""
 
 # Judge Agent prompt
-JUDGE_AGENT_PROMPT = BASE_SYSTEM_PROMPT + """
+JUDGE_AGENT_PROMPT = (
+    BASE_SYSTEM_PROMPT
+    + """
 
 You are evaluating a synthetic clinician–patient dialogue from a research cohort.
 Your goals are:
@@ -80,9 +85,12 @@ You must provide:
 - A numeric score from 0.0 to 1.0 (higher = more realistic and grounded).
 - A short justification.
 - Concrete feedback for improvement on patient side, doctor side, and conversation flow."""
+)
 
 # EHR Summarizer Agent prompt
-EHR_SUMMARIZER_PROMPT = BASE_SYSTEM_PROMPT + """
+EHR_SUMMARIZER_PROMPT = (
+    BASE_SYSTEM_PROMPT
+    + """
 
 Summarize the following clinical note without inferring a care setting or severity category.
 
@@ -109,9 +117,12 @@ The documented diagnosis was [diagnosis]. Treatment included [specific treatment
 Do not infer information not in the text. If a focus area is not documented, skip it.
 
 Keep the summary short (5–8 sentences)."""
+)
 
 # Dialogue Summarizer Agent prompt
-DIALOGUE_SUMMARIZER_PROMPT = BASE_SYSTEM_PROMPT + """
+DIALOGUE_SUMMARIZER_PROMPT = (
+    BASE_SYSTEM_PROMPT
+    + """
 
 Summarize the following doctor–patient dialogue.
 
@@ -139,6 +150,7 @@ Example structure:
 IMPORTANT: Only report what was explicitly discussed. Do not infer or add information.
 
 Keep the summary short (5–8 sentences)."""
+)
 
 # Patient profile-type knowledge instructions
 # These are injected into the patient system prompt to enforce
@@ -231,7 +243,9 @@ PATIENT_PROFILE_TYPE_KNOWLEDGE = {
 }
 
 # Prompt Improvement Agent prompt
-PROMPT_IMPROVEMENT_PROMPT = BASE_SYSTEM_PROMPT + """
+PROMPT_IMPROVEMENT_PROMPT = (
+    BASE_SYSTEM_PROMPT
+    + """
 
 You receive:
 1. A synthetic dialogue between a doctor and a patient.
@@ -244,3 +258,4 @@ You MUST keep the bias-aware and anti-hallucination instructions intact.
 Focus on things like: more open-ended questions, better organization of the consultation, or clearer expression by the patient.
 
 Output a concise JSON with new or modified prompt snippets or flags."""
+)

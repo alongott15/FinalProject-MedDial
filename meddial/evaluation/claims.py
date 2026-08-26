@@ -49,20 +49,56 @@ class ClaimExtractor(Protocol):
 
 
 _QUESTION_STARTS = (
-    "what ", "when ", "where ", "why ", "how ", "do ", "does ", "did ",
-    "is ", "are ", "can ", "could ", "have ", "has ", "would ", "will ",
+    "what ",
+    "when ",
+    "where ",
+    "why ",
+    "how ",
+    "do ",
+    "does ",
+    "did ",
+    "is ",
+    "are ",
+    "can ",
+    "could ",
+    "have ",
+    "has ",
+    "would ",
+    "will ",
 )
 _HYPOTHESIS_MARKERS = (
-    "may be", "might be", "could be", "possibly", "likely", "sounds like",
-    "working diagnosis", "differential", "i suspect", "i think this is",
+    "may be",
+    "might be",
+    "could be",
+    "possibly",
+    "likely",
+    "sounds like",
+    "working diagnosis",
+    "differential",
+    "i suspect",
+    "i think this is",
 )
 _RECOMMENDATION_MARKERS = (
-    "i recommend", "we recommend", "i suggest", "you should", "you could try",
-    "the plan is", "start taking", "stop taking", "prescribe",
+    "i recommend",
+    "we recommend",
+    "i suggest",
+    "you should",
+    "you could try",
+    "the plan is",
+    "start taking",
+    "stop taking",
+    "prescribe",
 )
 _ADVICE_MARKERS = (
-    "seek care", "call", "return if", "watch for", "rest", "drink fluids",
-    "follow up", "avoid", "monitor",
+    "seek care",
+    "call",
+    "return if",
+    "watch for",
+    "rest",
+    "drink fluids",
+    "follow up",
+    "avoid",
+    "monitor",
 )
 _NON_MEDICAL_PHRASES = (
     "hello",
@@ -132,7 +168,9 @@ class RuleBasedClaimExtractor:
                     )
         if not claims:
             return ClaimExtractionResult(
-                EvaluationStatus.UNSCORABLE, (), "No claims could be extracted from non-empty dialogue"
+                EvaluationStatus.UNSCORABLE,
+                (),
+                "No claims could be extracted from non-empty dialogue",
             )
         return ClaimExtractionResult(EvaluationStatus.PASS, tuple(claims), "Claims extracted")
 
@@ -145,7 +183,9 @@ class LLMClaimExtractor:
 
     def extract(self, dialogue: Sequence[Mapping[str, str]]) -> ClaimExtractionResult:
         if not dialogue:
-            return ClaimExtractionResult(EvaluationStatus.UNSCORABLE, (), "Dialogue contains no turns")
+            return ClaimExtractionResult(
+                EvaluationStatus.UNSCORABLE, (), "Dialogue contains no turns"
+            )
         prompt = json.dumps(list(dialogue), ensure_ascii=False)
         messages = [
             ChatMessage(
@@ -162,7 +202,9 @@ class LLMClaimExtractor:
         try:
             response = self.provider.generate(messages).content
         except Exception as exc:
-            return ClaimExtractionResult(EvaluationStatus.ERROR, (), f"Claim extraction failed: {exc}")
+            return ClaimExtractionResult(
+                EvaluationStatus.ERROR, (), f"Claim extraction failed: {exc}"
+            )
         try:
             match = re.search(r"\[.*\]", response, re.DOTALL)
             if not match:
@@ -178,7 +220,9 @@ class LLMClaimExtractor:
                 for item in data
             )
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-            return ClaimExtractionResult(EvaluationStatus.ERROR, (), f"Invalid claim extraction: {exc}")
+            return ClaimExtractionResult(
+                EvaluationStatus.ERROR, (), f"Invalid claim extraction: {exc}"
+            )
         if not claims:
             return ClaimExtractionResult(
                 EvaluationStatus.UNSCORABLE,
@@ -232,9 +276,7 @@ def _entity_terms(reference: Mapping[str, Any]) -> set[str]:
     if chief and chief != "not provided":
         terms.add(str(chief).strip().lower())
     return {
-        term
-        for term in terms
-        if term and term.lower() not in {"not provided", "unknown", "none"}
+        term for term in terms if term and term.lower() not in {"not provided", "unknown", "none"}
     }
 
 

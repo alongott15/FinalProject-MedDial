@@ -64,11 +64,7 @@ class AcceptanceCriteria:
             else None
         )
         if incomplete:
-            statuses = {
-                metrics[name].status
-                for name in incomplete
-                if name in metrics
-            }
+            statuses = {metrics[name].status for name in incomplete if name in metrics}
             status = (
                 EvaluationStatus.ERROR
                 if EvaluationStatus.ERROR in statuses

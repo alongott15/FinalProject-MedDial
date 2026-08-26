@@ -1,6 +1,6 @@
 import logging
 from typing import Dict
-from Utils.llms_utils import load_gpt_model, chat_generate
+from Utils.llms_utils import chat_generate, load_restricted_clinical_model
 from Utils.bias_aware_prompts import EHR_SUMMARIZER_PROMPT
 
 logging.basicConfig(level=logging.INFO)
@@ -25,7 +25,7 @@ class EHRSummarizerAgent:
             self.llm = llm
         else:
             logger.info("Loading LLM for EHRSummarizerAgent")
-            self.llm = load_gpt_model(temperature=0.1, max_tokens=400)
+            self.llm = load_restricted_clinical_model(temperature=0.1, max_tokens=400)
 
     def summarize(self, ehr_text: str, metadata: Dict = None) -> str:
         """
@@ -43,16 +43,18 @@ class EHRSummarizerAgent:
         # Add metadata context if available
         metadata_str = ""
         if metadata:
-            demographics = metadata.get('Patient_Demographics', {})
+            demographics = metadata.get("Patient_Demographics", {})
             if demographics:
-                age = demographics.get('Age', 'Unknown')
-                sex = demographics.get('Sex', 'Unknown')
+                age = demographics.get("Age", "Unknown")
+                sex = demographics.get("Sex", "Unknown")
                 metadata_str = f"\nPatient: {age} year old {sex}"
 
         # Build prompt
         messages = [
             {"role": "system", "content": EHR_SUMMARIZER_PROMPT},
-            {"role": "user", "content": f"""Clinical Note:{metadata_str}
+            {
+                "role": "user",
+                "content": f"""Clinical Note:{metadata_str}
 
 {ehr_text[:2000]}
 
@@ -62,7 +64,8 @@ Provide a concise summary (5-8 sentences) covering:
 - Diagnosis (if documented)
 - Basic treatment/advice
 
-Summary:"""}
+Summary:""",
+            },
         ]
 
         try:

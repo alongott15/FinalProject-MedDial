@@ -2,8 +2,11 @@
   "name": "cmpb-full-meddial",
   "variant": "full_meddial",
   "seed": 42,
-  "max_attempts": 3,
+  "max_attempts": 1,
   "max_turns": 30,
+  "profile_types": ["NO_DIAGNOSIS_NO_TREATMENT"],
+  "study_phase": "architecture_ablation",
+  "feature_overrides": {"targeted_recovery": false},
   "acceptance_thresholds": {
     "naturalness": 0.6,
     "role_aware_clinical_faithfulness": 0.7,

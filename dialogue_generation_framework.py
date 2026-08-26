@@ -25,7 +25,7 @@ from meddial.experiments.aggregation import aggregate_attempt_records, build_glo
 from meddial.experiments.config import ExperimentConfig
 from meddial.experiments.records import AttemptRecord, AttemptStore, RunManager
 from meddial.knowledge import ConversationContexts, build_conversation_contexts
-from meddial.llm import LLMProvider
+from meddial.llm import DataClassification, LLMProvider, ensure_provider_compatible
 from meddial.recovery import FailureClassifier
 from simulation import simulate_dialogue
 from Utils.dialogue_markdown import save_dialogue_markdown
@@ -64,6 +64,10 @@ class DialogueGenerationPipeline:
         self.experiment_config = experiment_config or ExperimentConfig(
             max_attempts=max_attempts, max_turns=max_turns
         )
+        if generation_llm is not None:
+            ensure_provider_compatible(generation_llm, DataClassification.RESTRICTED_CLINICAL)
+        if evaluator_llm is not None:
+            ensure_provider_compatible(evaluator_llm, DataClassification.RESTRICTED_CLINICAL)
         self.generation_llm = generation_llm
         self.judge_agent = judge_agent or RoleAwareJudgeAgent(
             llm=evaluator_llm or generation_llm,
@@ -77,7 +81,7 @@ class DialogueGenerationPipeline:
         self.attempt_store: AttemptStore | None = None
         self.run_dir: Path | None = None
         generation_model = (
-            generation_llm.model_name if generation_llm is not None else "azure_ai_foundry:gpt-4.1"
+            generation_llm.model_name if generation_llm is not None else "local:gpt-oss-20b"
         )
         evaluator_provider = getattr(self.judge_agent, "llm", None)
         evaluator_model = getattr(evaluator_provider, "model_name", type(self.judge_agent).__name__)
@@ -89,8 +93,8 @@ class DialogueGenerationPipeline:
                 **dict(self.experiment_config.generation_models),
             },
             evaluator_models=(
-                *self.experiment_config.evaluator_models,
-                {"evaluator_id": "primary", "model": evaluator_model},
+                self.experiment_config.evaluator_models
+                or ({"evaluator_id": "primary", "model": evaluator_model},)
             ),
             acceptance_thresholds={
                 "legacy_composite_reporting_threshold": judge_threshold,
@@ -186,9 +190,7 @@ class DialogueGenerationPipeline:
         full_profile: Mapping[str, Any],
     ) -> dict[str, Any]:
         profile_id = self._profile_id(full_profile)
-        profile_type = str(
-            patient_profile.get("profile_type", "NO_DIAGNOSIS_NO_TREATMENT")
-        )
+        profile_type = str(patient_profile.get("profile_type", "NO_DIAGNOSIS_NO_TREATMENT"))
         contexts = build_conversation_contexts(full_profile, profile_type)
         prior_records = (
             self.attempt_store.attempts_for(profile_id, profile_type)
@@ -213,9 +215,7 @@ class DialogueGenerationPipeline:
         best_score = -1.0
         improvements: Mapping[str, str] = {}
 
-        prior_accepted = next(
-            (record for record in prior_records if record.get("accepted")), None
-        )
+        prior_accepted = next((record for record in prior_records if record.get("accepted")), None)
         if prior_accepted is not None:
             accepted_dialogue = {
                 "conversation": prior_accepted.get("dialogue", []),
@@ -224,11 +224,11 @@ class DialogueGenerationPipeline:
                 "attempt": prior_accepted.get("attempt"),
             }
 
-        next_attempt = max((int(record.get("attempt", 0)) for record in prior_records), default=0) + 1
+        next_attempt = (
+            max((int(record.get("attempt", 0)) for record in prior_records), default=0) + 1
+        )
         for attempt_index in (
-            range(next_attempt, self.max_attempts + 1)
-            if accepted_dialogue is None
-            else range(0)
+            range(next_attempt, self.max_attempts + 1) if accepted_dialogue is None else range(0)
         ):
             started_at = datetime.now(timezone.utc).isoformat()
             attempt_start = time.perf_counter()
@@ -317,9 +317,7 @@ class DialogueGenerationPipeline:
             if accepted:
                 break
             if evaluation and attempt_index < self.max_attempts:
-                improvements = self.recovery_agent.improve_prompts(
-                    evaluation, list(conversation)
-                )
+                improvements = self.recovery_agent.improve_prompts(evaluation, list(conversation))
 
         if accepted_dialogue is not None:
             return {
@@ -375,12 +373,10 @@ class DialogueGenerationPipeline:
                 "turn_count": len(result["dialogue"]),
                 "word_count": len((result["transcript"] or "").split()),
                 "doctor_turns": sum(
-                    str(turn.get("role", "")).lower() == "doctor"
-                    for turn in result["dialogue"]
+                    str(turn.get("role", "")).lower() == "doctor" for turn in result["dialogue"]
                 ),
                 "patient_turns": sum(
-                    str(turn.get("role", "")).lower() == "patient"
-                    for turn in result["dialogue"]
+                    str(turn.get("role", "")).lower() == "patient" for turn in result["dialogue"]
                 ),
             }
         if result["success"] and self.run_dir is not None:
@@ -450,9 +446,7 @@ class DialogueGenerationPipeline:
 
         attempts = self.attempt_store.load_attempts()
         per_profile_stats = aggregate_attempt_records(attempts, selected_types)
-        global_stats = build_global_stats(
-            per_profile_stats, len(gtmf_data), selected_types
-        )
+        global_stats = build_global_stats(per_profile_stats, len(gtmf_data), selected_types)
         global_stats.update(
             {
                 "run_id": self.run_context.run_id,

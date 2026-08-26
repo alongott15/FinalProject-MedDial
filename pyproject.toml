@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meddial"
-version = "0.2.0"
+version = "0.3.0"
 description = "Knowledge-controlled synthetic clinical dialogue research framework"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -14,6 +14,10 @@ dependencies = [
   "pydantic>=2.8,<3.0",
   "python-dotenv>=1.0,<2.0",
 ]
+
+[project.scripts]
+meddial-cohort = "meddial.cohort_cli:main"
+meddial-study-plan = "meddial.study_cli:main"
 
 [project.optional-dependencies]
 azure = [
@@ -58,4 +62,9 @@ exclude = ["tests/", "Agents/", "Utils/", "gtmf_creation.py"]
 
 [[tool.mypy.overrides]]
 module = ["azure.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["Agents.*", "Utils.*", "gtmf_creation"]
+follow_imports = "skip"
 ignore_missing_imports = true

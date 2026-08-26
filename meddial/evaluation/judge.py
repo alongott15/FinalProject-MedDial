@@ -14,7 +14,13 @@ from meddial.evaluation.ensemble import IndependentEvaluatorEnsemble
 from meddial.evaluation.models import EvaluationStatus, MetricResult
 from meddial.evaluation.structural import DeterministicStructuralValidator
 from meddial.knowledge import EvaluatorContext, build_conversation_contexts
-from meddial.llm import ChatMessage, LLMProvider, load_gpt_model
+from meddial.llm import (
+    ChatMessage,
+    DataClassification,
+    LLMProvider,
+    ensure_provider_compatible,
+    load_restricted_clinical_model,
+)
 
 
 class RoleAwareJudgeAgent:
@@ -27,8 +33,10 @@ class RoleAwareJudgeAgent:
         boundary_validator: KnowledgeBoundaryValidator | None = None,
         structural_validator: DeterministicStructuralValidator | None = None,
         ensemble: IndependentEvaluatorEnsemble | None = None,
+        data_classification: DataClassification = DataClassification.RESTRICTED_CLINICAL,
     ) -> None:
-        self.llm = llm or load_gpt_model(temperature=0.1, max_tokens=800)
+        self.llm = llm or load_restricted_clinical_model(temperature=0.1, max_tokens=800)
+        ensure_provider_compatible(self.llm, data_classification)
         self.threshold = threshold  # legacy/reporting compatibility only
         self.faithfulness = faithfulness or RoleAwareClinicalFaithfulness()
         self.boundary_validator = boundary_validator or KnowledgeBoundaryValidator()
@@ -82,15 +90,12 @@ class RoleAwareJudgeAgent:
     ) -> dict[str, Any]:
         if dialogue_transcript is None:
             dialogue_transcript = "\n".join(
-                f"{turn.get('role', 'Unknown')}: {turn.get('content', '')}"
-                for turn in dialogue
+                f"{turn.get('role', 'Unknown')}: {turn.get('content', '')}" for turn in dialogue
             )
         if evaluator_context is None:
             if patient_profile is None:
                 return self._incomplete_result("No evaluator context or profile was supplied")
-            profile_type = patient_profile.get(
-                "profile_type", "NO_DIAGNOSIS_NO_TREATMENT"
-            )
+            profile_type = patient_profile.get("profile_type", "NO_DIAGNOSIS_NO_TREATMENT")
             evaluator_context = build_conversation_contexts(
                 patient_profile, str(profile_type)
             ).evaluator

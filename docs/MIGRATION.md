@@ -1,6 +1,8 @@
-# MedDial 0.2 migration notes
+# MedDial 0.3 migration notes
 
-This release changes scientific defaults. Existing generated dialogue and thesis artifacts are not modified.
+This release changes scientific and data-governance defaults. Thesis artifacts remain unchanged;
+generated clinical profiles and dialogues are removed from the tracked working tree and
+preserved only in a local quarantine pending owner/institutional review.
 
 ## Terminology
 
@@ -19,13 +21,24 @@ This release changes scientific defaults. Existing generated dialogue and thesis
 - Runs are stored under `output_dialogue_framework/runs/<run_id>/` with immutable attempt files and a config hash.
 - Resume reuses only a matching config and input-reference manifest hash.
 - `fetch_notes_with_light_case_filter` returns eligible notes only and can write/reuse a deterministic cohort manifest.
+- The complete discharge-summary pool is scanned before deterministic, one-patient sampling;
+  publication extraction requires a completed two-clinician review file.
+- Restricted clinical calls now default to `LocalOpenAICompatibleProvider`; external providers
+  raise `DataBoundaryError`.
+- Independent evaluator output is claim-level and dimension-level, and publication ensembles
+  require three complete judges.
+- Private manifests contain source identifiers; release manifests contain salted study IDs only.
+- Aggregation reports first-attempt success, factuality/plausibility dimensions, structural
+  validity, leakage, and model-call/token totals separately from generation.
 
 ## Setup
 
-Install with `pip install -e ".[azure]"`. Development checks use `pip install -e ".[dev]"`.
+Install with `pip install -e ".[dev]"`. Azure remains an optional extra for explicitly
+public/synthetic inputs only.
 
 The historical `requirements.txt` remains as a one-line compatibility entry point; dependency definitions live in `pyproject.toml` and the generated `uv.lock`.
 
 ## Licensing TODO
 
-No license is granted by this repository. The repository owner must choose and approve a license before adding a `LICENSE` file or encouraging reuse.
+Apache-2.0 is recommended, but no license is granted until the repository owner confirms
+copyright authority and approves the holder/year. See `docs/LICENSING.md`.
