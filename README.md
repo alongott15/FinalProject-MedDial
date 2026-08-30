@@ -20,8 +20,9 @@ derived data ships in this repository — see [Data](#data) below.
 | Path | Purpose |
 |---|---|
 | `Agents/` | LLM agents: `PatientAgent`, `DoctorAgent`, `DeepEvalJudgeAgent`, `EHRSummarizerAgent`, `PromptImprovementAgent` |
-| `Models/classes.py` | Data classes for extracted medical entities (GTMF) |
-| `Utils/` | Prompt templates, dialogue markdown I/O, LLM client helpers, partial-profile masking, repetition filtering |
+| `meddial/knowledge/` | Structured Clinical Reference, field paths, index-diagnosis redaction, knowledge policies, per-participant contexts |
+| `configs/policies/` | Knowledge policies as data — one JSON file per disclosure arm, hash-locked by `POLICY_HASHES.json` |
+| `Utils/` | Prompt templates, dialogue markdown I/O, repetition filtering |
 | `agent_prompts/` | Prompt text files consumed by each agent |
 | `dialogue_generation_framework.py` | Generates dialogues with iterative quality improvement |
 | `gtmf_creation.py` | Extracts Ground Truth Medical Forms (GTMF) from clinical notes |
@@ -72,6 +73,30 @@ MEDDIAL_JUDGE_MODEL=qwen2.5:14b
 
 The weight digest is resolved from the running server at startup, so a run
 cannot begin against weights it cannot identify.
+
+## Knowledge policies
+
+What the simulated patient knows is decided by a *knowledge policy*, not by
+prompt wording. A policy is a JSON file in `configs/policies/` naming which
+reference fields the patient may see, which are withheld, and where index-
+diagnosis terms are redacted from free text. Adding an experimental arm
+means adding a file; the leak test in
+`tests/unit/test_knowledge_policy.py` then covers it automatically, because
+it enumerates the registry.
+
+Three properties are enforced rather than assumed:
+
+- **Fail closed.** A reference field no policy classifies is invisible, and
+  a policy that leaves one unclassified is rejected at load time.
+- **Versioned.** Each policy's body is hash-locked. Editing one in place
+  without bumping its version fails loudly.
+- **Retired arms stay replayable.** The thesis-era policies are kept at
+  `v1.0` and marked deprecated: they can be replayed for comparison, but a
+  confirmatory run refuses them.
+
+What the *doctor* is told is a separate input (`doctor_guidance_id`),
+defaulting to the patient's policy id so current behaviour is reproducible.
+Set it explicitly to vary disclosure and physician guidance independently.
 
 ## Running the hygiene guard and tests
 

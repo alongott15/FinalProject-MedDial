@@ -1,0 +1,26 @@
+{
+  "policy_id": "NO_DIAGNOSIS_NO_TREATMENT",
+  "version": "2.0",
+  "patient_visible": [
+    "core.symptoms",
+    "context.demographics",
+    "context.allergies",
+    "context.medical_history.past_medical_history",
+    "additional.chief_complaint"
+  ],
+  "patient_masked": [
+    "core.diagnoses",
+    "core.treatments",
+    "context.current_medications",
+    "context.discharge_medications"
+  ],
+  "redact_index_diagnosis_terms_in": [
+    "context.medical_history.past_medical_history",
+    "additional.chief_complaint"
+  ],
+  "doctor_visible": [
+    "context.demographics"
+  ],
+  "rationale": "The most restricted arm: neither the diagnosis nor what was done about it. Strictly a subset of what NO_DIAGNOSIS exposes, which is what makes the three arms an ordered disclosure ladder rather than three unrelated conditions.",
+  "supersedes": "NO_DIAGNOSIS_NO_TREATMENT@1.0"
+}

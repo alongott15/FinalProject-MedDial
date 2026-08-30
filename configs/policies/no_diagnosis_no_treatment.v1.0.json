@@ -1,0 +1,23 @@
+{
+  "policy_id": "NO_DIAGNOSIS_NO_TREATMENT",
+  "version": "1.0",
+  "patient_visible": [
+    "core.symptoms",
+    "context.demographics",
+    "context.allergies",
+    "context.current_medications",
+    "context.discharge_medications",
+    "context.medical_history.past_medical_history",
+    "additional.chief_complaint"
+  ],
+  "patient_masked": [
+    "core.diagnoses",
+    "core.treatments"
+  ],
+  "redact_index_diagnosis_terms_in": [],
+  "doctor_visible": [
+    "context.demographics"
+  ],
+  "rationale": "Thesis-era arm, reproducing Utils/partial_profile.py: diagnoses and treatment options cleared, medication lists and past medical history left intact. Retained as an E0 comparison arm. Deprecated: refused by a confirmatory run.",
+  "deprecated": true
+}

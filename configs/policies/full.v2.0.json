@@ -1,0 +1,21 @@
+{
+  "policy_id": "FULL",
+  "version": "2.0",
+  "patient_visible": [
+    "core.symptoms",
+    "core.diagnoses",
+    "core.treatments",
+    "context.demographics",
+    "context.allergies",
+    "context.current_medications",
+    "context.discharge_medications",
+    "context.medical_history.past_medical_history",
+    "additional.chief_complaint"
+  ],
+  "patient_masked": [],
+  "redact_index_diagnosis_terms_in": [],
+  "doctor_visible": [
+    "context.demographics"
+  ],
+  "rationale": "Upper bound on patient knowledge. The patient knows their own diagnosis and can state it, so this arm measures dialogue quality when nothing is withheld. Unchanged in substance from the thesis FULL condition; re-versioned to 2.0 because it is now validated against the same field surface as the other arms."
+}

@@ -4,7 +4,12 @@ import os
 import time
 from pathlib import Path
 
-from Utils.partial_profile import generate_partial_profiles
+from meddial.knowledge import (
+    PolicyRegistry,
+    StructuredClinicalReference,
+    build_contexts,
+    to_legacy_profile,
+)
 from Utils.markdown_gtmf import load_all_gtmfs_from_directory
 from Utils.dialogue_markdown import save_dialogue_markdown
 from Agents.PatientAgent import PatientAgent
@@ -46,7 +51,8 @@ def _provider_from_env(prefix: str) -> LLMProvider:
 
 class DialogueGenerationPipeline:
     def __init__(self, generator_provider: LLMProvider, judge_provider: LLMProvider,
-                 max_attempts=3, max_turns=30, judge_threshold=0.7, output_dir="output_dialogue_framework"):
+                 max_attempts=3, max_turns=30, judge_threshold=0.7, output_dir="output_dialogue_framework",
+                 policy_registry: PolicyRegistry = None, doctor_guidance_id: str = None):
         """
         Initialize the dialogue generation pipeline.
 
@@ -60,6 +66,12 @@ class DialogueGenerationPipeline:
                       Dialogues can end naturally much earlier (6-12 turns typically).
             judge_threshold: Minimum score for dialogue to be considered realistic
             output_dir: Directory for output files
+            policy_registry: Where knowledge policies are read from. Defaults to
+                configs/policies.
+            doctor_guidance_id: What the doctor is told, independent of what the
+                patient knows. Defaults to the patient's policy id, which
+                reproduces the coupled thesis behaviour; set it explicitly to
+                vary the two factors separately (D-05).
         """
         self.generator_provider = generator_provider
         self.judge_provider = judge_provider
@@ -68,6 +80,8 @@ class DialogueGenerationPipeline:
         self.judge_threshold = judge_threshold
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
+        self.policies = policy_registry or PolicyRegistry()
+        self.doctor_guidance_id = doctor_guidance_id
 
         if generator_provider.model_family == judge_provider.model_family:
             logger.warning(
@@ -223,7 +237,19 @@ class DialogueGenerationPipeline:
 
         start_time = time.time()
 
-        partial_profile = generate_partial_profiles(full_profile, profile_type)
+        # The patient's view is built by masking the reference under a
+        # versioned policy. A confirmatory run refuses a deprecated arm, so a
+        # reported result cannot come from the leaky thesis masking (D-04).
+        reference = StructuredClinicalReference.model_validate(full_profile)
+        policy = self.policies.for_confirmatory_run(profile_type)
+        contexts = build_contexts(
+            reference, policy, guidance_id=self.doctor_guidance_id
+        )
+        partial_profile = to_legacy_profile(contexts.patient)
+        logger.info(
+            f"  Policy {policy.key}: redacted "
+            f"{contexts.patient.redactions.total} index-diagnosis mention(s)"
+        )
 
         dialogue_result = self.generate_dialogue_with_iterations(
             partial_profile, full_profile
@@ -246,6 +272,9 @@ class DialogueGenerationPipeline:
             "subject_id": full_profile.get('subject_id'),
             "hadm_id": full_profile.get('hadm_id'),
             "profile_type": profile_type,
+            "policy_version": policy.version,
+            "doctor_guidance_id": contexts.doctor.guidance_id,
+            "redacted_diagnosis_mentions": contexts.patient.redactions.total,
             "success": True,
             "is_realistic": is_realistic,
             "best_attempt": dialogue_result['best_attempt'],

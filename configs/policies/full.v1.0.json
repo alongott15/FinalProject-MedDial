@@ -1,0 +1,22 @@
+{
+  "policy_id": "FULL",
+  "version": "1.0",
+  "patient_visible": [
+    "core.symptoms",
+    "core.diagnoses",
+    "core.treatments",
+    "context.demographics",
+    "context.allergies",
+    "context.current_medications",
+    "context.discharge_medications",
+    "context.medical_history.past_medical_history",
+    "additional.chief_complaint"
+  ],
+  "patient_masked": [],
+  "redact_index_diagnosis_terms_in": [],
+  "doctor_visible": [
+    "context.demographics"
+  ],
+  "rationale": "Thesis-era arm, retained so the reported 0.739/0.787/0.835 trend can be replayed under E0. Deprecated: usable for comparison, refused by a confirmatory run.",
+  "deprecated": true
+}

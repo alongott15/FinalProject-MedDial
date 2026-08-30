@@ -41,7 +41,7 @@ py-modules = ["dialogue_generation_framework", "gtmf_creation", "simulation"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["meddial*", "Agents*", "Models*", "Utils*", "scripts*"]
+include = ["meddial*", "Agents*", "Utils*", "scripts*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

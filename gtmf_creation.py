@@ -3,7 +3,7 @@ import logging
 from azure.ai.inference import ChatCompletionsClient
 from azure.ai.inference.models import SystemMessage, UserMessage
 from azure.core.credentials import AzureKeyCredential
-from Models.classes import GTMF
+from meddial.knowledge import GTMF
 from Utils.utils import format_date, calculate_age
 from Utils.bias_aware_prompts import GTMF_CREATION_PROMPT
 from Utils.markdown_gtmf import save_gtmf_markdown

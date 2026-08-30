@@ -1,0 +1,23 @@
+{
+  "policy_id": "NO_DIAGNOSIS",
+  "version": "1.0",
+  "patient_visible": [
+    "core.symptoms",
+    "core.treatments",
+    "context.demographics",
+    "context.allergies",
+    "context.current_medications",
+    "context.discharge_medications",
+    "context.medical_history.past_medical_history",
+    "additional.chief_complaint"
+  ],
+  "patient_masked": [
+    "core.diagnoses"
+  ],
+  "redact_index_diagnosis_terms_in": [],
+  "doctor_visible": [
+    "context.demographics"
+  ],
+  "rationale": "Thesis-era arm, reproducing Utils/partial_profile.py exactly: it cleared core.diagnoses and nothing else, so medication purposes and past medical history still named the index diagnosis (D-04). Retained as the E0 comparison arm that quantifies how much of the reported disclosure effect was leakage. Deprecated: refused by a confirmatory run.",
+  "deprecated": true
+}

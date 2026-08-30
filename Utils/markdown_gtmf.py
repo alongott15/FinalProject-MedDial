@@ -1,12 +1,14 @@
 import os
 import re
 from pathlib import Path
-from Models.classes import GTMF, Symptom, Diagnosis, Medication, TreatmentOption
+from meddial.knowledge import GTMF, Symptom, Diagnosis, Medication, TreatmentOption
 
 
 def gtmf_to_markdown(gtmf: GTMF | dict[str, any]) -> str:
     if isinstance(gtmf, GTMF):
-        gtmf_dict = gtmf.model_dump() if hasattr(gtmf, 'model_dump') else gtmf.dict()
+        # by_alias: the reference stores canonical snake_case names and
+        # exposes the PascalCase form this renderer reads as aliases.
+        gtmf_dict = gtmf.model_dump(by_alias=True)
     else:
         gtmf_dict = gtmf
 

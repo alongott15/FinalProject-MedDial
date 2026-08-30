@@ -1,0 +1,30 @@
+{
+  "policy_id": "NO_DIAGNOSIS",
+  "version": "2.0",
+  "patient_visible": [
+    "core.symptoms",
+    "core.treatments",
+    "context.demographics",
+    "context.allergies",
+    "context.medical_history.past_medical_history",
+    "additional.chief_complaint"
+  ],
+  "patient_masked": [
+    "core.diagnoses",
+    "core.treatments[].medications",
+    "context.current_medications",
+    "context.discharge_medications"
+  ],
+  "redact_index_diagnosis_terms_in": [
+    "context.medical_history.past_medical_history",
+    "additional.chief_complaint",
+    "core.treatments[].procedure",
+    "core.treatments[].details",
+    "core.treatments[].treatment"
+  ],
+  "doctor_visible": [
+    "context.demographics"
+  ],
+  "rationale": "Withhold the index diagnosis. Clearing core.diagnoses alone is not enough (D-04): a medication's purpose field names the condition it treats, so all three medication lists are dropped, including the ones nested under a treatment option. Past medical history and the chief complaint are kept because a real patient knows both, with index-diagnosis terms redacted so they cannot state the answer verbatim (KNOW-5). Treatment free text is redacted for the same reason while the treatments themselves stay visible.",
+  "supersedes": "NO_DIAGNOSIS@1.0"
+}
