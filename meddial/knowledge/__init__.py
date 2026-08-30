@@ -8,6 +8,11 @@ from meddial.knowledge.contexts import (
     build_contexts,
     to_legacy_profile,
 )
+from meddial.knowledge.fieldpath import (
+    addressable_paths,
+    policy_surface,
+    strip_evidence,
+)
 from meddial.knowledge.policy import (
     DeprecatedPolicyError,
     KnowledgePolicy,
@@ -64,8 +69,11 @@ __all__ = [
     "Symptom",
     "TreatmentOption",
     "UnknownPolicyError",
+    "addressable_paths",
     "build_contexts",
     "index_diagnosis_terms",
     "load_policies",
+    "policy_surface",
+    "strip_evidence",
     "to_legacy_profile",
 ]
