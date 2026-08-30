@@ -1,7 +1,7 @@
 import logging
 import json
 from typing import Dict
-from Utils.llms_utils import load_gpt_model, chat_generate
+from meddial.llm import DataClassification, LLMProvider, to_chat_messages
 from Utils.bias_aware_prompts import PROMPT_IMPROVEMENT_PROMPT, PATIENT_PROFILE_TYPE_KNOWLEDGE
 
 logging.basicConfig(level=logging.INFO)
@@ -15,18 +15,28 @@ class PromptImprovementAgent:
     Maintains bias-aware constraints while adjusting stylistic/structural aspects.
     """
 
-    def __init__(self, llm=None):
+    def __init__(
+        self,
+        provider: LLMProvider,
+        *,
+        temperature: float = 0.3,
+        max_tokens: int = 600,
+        seed: int | None = None,
+    ):
         """
         Initialize PromptImprovementAgent.
 
         Args:
-            llm: Language model client (if None, will load default)
+            provider: Provider to use. Injected, never constructed here, so the
+                run manifest records one model configuration for the whole run.
+            temperature: Sampling temperature.
+            max_tokens: Completion budget.
+            seed: Sampling seed, when the provider honours one.
         """
-        if llm:
-            self.llm = llm
-        else:
-            logger.info("Loading LLM for PromptImprovementAgent")
-            self.llm = load_gpt_model(temperature=0.3, max_tokens=600)
+        self._provider = provider
+        self._temperature = temperature
+        self._max_tokens = max_tokens
+        self._seed = seed
 
     def improve_prompts(
         self,
@@ -69,15 +79,25 @@ class PromptImprovementAgent:
             )}
         ]
 
+        # A ProviderError propagates: a broken provider must halt the run rather
+        # than quietly degrade every subsequent iteration to generic advice.
+        response = self._provider.complete(
+            to_chat_messages(messages),
+            # The dialogue under review is MIMIC-derived.
+            classification=DataClassification.RESTRICTED_CLINICAL,
+            temperature=self._temperature,
+            max_tokens=self._max_tokens,
+            seed=self._seed,
+        ).text
+
         try:
-            response = chat_generate(self.llm, messages)
             improvements = self._parse_improvements(response)
             logger.info("Generated prompt improvements successfully")
             return improvements
-
-        except Exception as e:
-            logger.error(f"Error generating improvements: {e}")
-            # Return generic improvements
+        except (ValueError, KeyError, json.JSONDecodeError) as e:
+            # The model answered but not in the expected shape; generic advice
+            # is an acceptable degradation for a self-improvement loop.
+            logger.error(f"Could not parse improvements: {e}")
             return self._fallback_improvements(judge_feedback)
 
     def _build_improvement_request(

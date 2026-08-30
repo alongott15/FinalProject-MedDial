@@ -11,6 +11,12 @@ from Agents.PatientAgent import PatientAgent
 from Agents.DoctorAgent import DoctorAgent
 from Agents.DeepEvalJudgeAgent import DeepEvalJudgeAgent
 from Agents.PromptImprovementAgent import PromptImprovementAgent
+from meddial.llm import (
+    LLMProvider,
+    LocalOpenAICompatibleProvider,
+    ProviderConfigurationError,
+    resolve_ollama_digest,
+)
 from simulation import simulate_dialogue
 
 
@@ -18,30 +24,63 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 
+def _provider_from_env(prefix: str) -> LLMProvider:
+    """Build a local provider from ``{prefix}_BASE_URL`` / ``{prefix}_MODEL``.
+
+    Provisional: the W2 config layer replaces this with a run manifest.
+    """
+    base_url = os.environ.get(f"{prefix}_BASE_URL", "http://localhost:11434/v1")
+    model_id = os.environ.get(f"{prefix}_MODEL")
+    if not model_id:
+        raise ProviderConfigurationError(
+            f"Set {prefix}_MODEL to the model this run should use."
+        )
+    return LocalOpenAICompatibleProvider(
+        base_url,
+        model_id,
+        model_digest=resolve_ollama_digest(base_url, model_id),
+        model_family=os.environ.get(f"{prefix}_FAMILY", model_id.split(":")[0]),
+        quantisation=os.environ.get(f"{prefix}_QUANT", "unknown"),
+    )
+
+
 class DialogueGenerationPipeline:
-    def __init__(self, max_attempts=3, max_turns=30, judge_threshold=0.7, output_dir="output_dialogue_framework"):
+    def __init__(self, generator_provider: LLMProvider, judge_provider: LLMProvider,
+                 max_attempts=3, max_turns=30, judge_threshold=0.7, output_dir="output_dialogue_framework"):
         """
         Initialize the dialogue generation pipeline.
 
         Args:
+            generator_provider: Provider driving the patient and doctor agents.
+            judge_provider: Provider driving the judge. Pass a different model
+                family than generator_provider, otherwise the judge is scoring
+                its own family's output and the scores are not independent.
             max_attempts: Maximum attempts to generate a realistic dialogue
             max_turns: Maximum turns per dialogue (safety limit, not target). Default 30.
                       Dialogues can end naturally much earlier (6-12 turns typically).
             judge_threshold: Minimum score for dialogue to be considered realistic
             output_dir: Directory for output files
         """
+        self.generator_provider = generator_provider
+        self.judge_provider = judge_provider
         self.max_attempts = max_attempts
         self.max_turns = max_turns
         self.judge_threshold = judge_threshold
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(exist_ok=True)
 
+        if generator_provider.model_family == judge_provider.model_family:
+            logger.warning(
+                "Judge and generator are both %r. Self-family scores are not "
+                "independent evidence and must be reported as such.",
+                judge_provider.model_family,
+            )
+
         logger.info("Initializing pipeline agents...")
         # DeepEvalJudgeAgent replaces the legacy JudgeAgent.
-        # It uses deepeval GEval metrics + RAGAS faithfulness, all backed by
-        # the same Azure AI Foundry / GPT-4.1 endpoint.
-        self.judge_agent = DeepEvalJudgeAgent(threshold=judge_threshold)
-        self.prompt_improvement_agent = PromptImprovementAgent()
+        # It uses deepeval GEval metrics + RAGAS faithfulness.
+        self.judge_agent = DeepEvalJudgeAgent(judge_provider, threshold=judge_threshold)
+        self.prompt_improvement_agent = PromptImprovementAgent(judge_provider)
 
         logger.info("Pipeline initialized successfully")
 
@@ -60,8 +99,8 @@ class DialogueGenerationPipeline:
         best_score = 0.0
         best_attempt_idx = -1
 
-        doctor_agent = DoctorAgent(patient_profile=patient_profile)
-        patient_agent = PatientAgent(profile=patient_profile)
+        doctor_agent = DoctorAgent(self.generator_provider, patient_profile=patient_profile)
+        patient_agent = PatientAgent(patient_profile, self.generator_provider)
 
         for attempt_idx in range(self.max_attempts):
             logger.info(f"  Attempt {attempt_idx + 1}/{self.max_attempts}")
@@ -496,7 +535,15 @@ def main():
 
     logger.info(f"Loaded {len(gtmf_data)} GTMF profiles from Markdown files")
 
+    # Provisional wiring until the W2 config layer lands: read the two
+    # endpoints from the environment and resolve each weight digest from the
+    # running server, so a run cannot start against unidentifiable weights.
+    generator_provider = _provider_from_env("MEDDIAL_GENERATOR")
+    judge_provider = _provider_from_env("MEDDIAL_JUDGE")
+
     pipeline = DialogueGenerationPipeline(
+        generator_provider,
+        judge_provider,
         max_attempts=3,
         max_turns=30,  # Safety limit - dialogues can end naturally much earlier (6-12 turns)
         judge_threshold=0.70,

@@ -8,7 +8,12 @@ from deepeval.models import DeepEvalBaseLLM
 from deepeval.test_case import LLMTestCase, LLMTestCaseParams
 
 from Utils.bias_aware_prompts import PATIENT_PROFILE_TYPE_KNOWLEDGE
-from Utils.llms_utils import AzureAIFoundryClient, chat_generate, load_gpt_model
+from meddial.llm import (
+    DataClassification,
+    LLMProvider,
+    ProviderError,
+    to_chat_messages,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -18,31 +23,47 @@ logger = logging.getLogger(__name__)
 # Azure AI Foundry → deepeval adapter
 # ---------------------------------------------------------------------------
 
-class AzureFoundryDeepEvalLLM(DeepEvalBaseLLM):
+class ProviderDeepEvalLLM(DeepEvalBaseLLM):
     """
-    Thin wrapper that exposes ``AzureAIFoundryClient`` as a deepeval-compatible
-    ``DeepEvalBaseLLM`` so that GEval metrics can use the project's existing
-    Azure AI Foundry / GPT-4.1 endpoint without any additional SDK.
+    Thin wrapper that exposes an ``LLMProvider`` as a deepeval-compatible
+    ``DeepEvalBaseLLM``, so GEval metrics run through the same governed
+    provider as the rest of the pipeline rather than a second client.
     """
 
-    def __init__(self, azure_client: AzureAIFoundryClient):
-        self.azure_client = azure_client
+    def __init__(
+        self,
+        provider: LLMProvider,
+        *,
+        temperature: float = 0.1,
+        max_tokens: int = 1000,
+        seed: int | None = None,
+    ):
+        self.provider = provider
+        self._temperature = temperature
+        self._max_tokens = max_tokens
+        self._seed = seed
         super().__init__()
 
-    def load_model(self) -> AzureAIFoundryClient:
-        return self.azure_client
+    def load_model(self) -> LLMProvider:
+        return self.provider
 
     def generate(self, prompt: str) -> Tuple[str, Optional[dict]]:
-        messages = [{"role": "user", "content": prompt}]
-        response = chat_generate(self.azure_client, messages)
-        return response, None
+        result = self.provider.complete(
+            to_chat_messages([{"role": "user", "content": prompt}]),
+            # Judge prompts embed the dialogue, which is MIMIC-derived.
+            classification=DataClassification.RESTRICTED_CLINICAL,
+            temperature=self._temperature,
+            max_tokens=self._max_tokens,
+            seed=self._seed,
+        )
+        return result.text, None
 
     async def a_generate(self, prompt: str) -> Tuple[str, Optional[dict]]:
         # Async interface required by deepeval — delegates to sync implementation
         return self.generate(prompt)
 
     def get_model_name(self) -> str:
-        return f"azure-foundry-{self.azure_client.model_name}"
+        return f"{self.provider.model_family}-judge"
 
 
 # ---------------------------------------------------------------------------
@@ -79,19 +100,40 @@ class DeepEvalJudgeAgent:
 
     def __init__(
         self,
-        llm=None,
+        provider: LLMProvider,
         threshold: float = 0.70,
         weights: Optional[Dict[str, float]] = None,
+        *,
+        temperature: float = 0.1,
+        max_tokens: int = 1000,
+        seed: int | None = None,
     ):
-        if llm:
-            self.llm = llm
-        else:
-            logger.info("Loading LLM for DeepEvalJudgeAgent")
-            self.llm = load_gpt_model(temperature=0.1, max_tokens=1000)
+        # Injected, never constructed here (GOV-4). The caller is responsible
+        # for passing a judge from a different family than the generator.
+        self._provider = provider
+        self._temperature = temperature
+        self._max_tokens = max_tokens
+        self._seed = seed
 
         self.threshold = threshold
         self.weights = weights or self.DEFAULT_WEIGHTS
-        self.deepeval_llm = AzureFoundryDeepEvalLLM(self.llm)
+        self.deepeval_llm = ProviderDeepEvalLLM(
+            provider,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            seed=seed,
+        )
+
+    def _complete(self, messages: List[Dict[str, str]]) -> str:
+        """Run one judge call. Raises ProviderError; never returns error text."""
+        return self._provider.complete(
+            to_chat_messages(messages),
+            # Judge prompts embed the dialogue, which is MIMIC-derived.
+            classification=DataClassification.RESTRICTED_CLINICAL,
+            temperature=self._temperature,
+            max_tokens=self._max_tokens,
+            seed=self._seed,
+        ).text
 
         logger.info(
             f"DeepEvalJudgeAgent ready | threshold={threshold} | weights={self.weights}"
@@ -400,7 +442,7 @@ class DeepEvalJudgeAgent:
         ]
 
         try:
-            response = chat_generate(self.llm, messages)
+            response = self._complete(messages)
             json_match = re.search(r"\[.*?\]", response, re.DOTALL)
             if json_match:
                 data = json.loads(json_match.group(0))
@@ -549,8 +591,12 @@ class DeepEvalJudgeAgent:
         ]
 
         try:
-            response = chat_generate(self.llm, messages).strip().lower()
+            response = self._complete(messages).strip().lower()
             return response.startswith("yes")
+        except ProviderError:
+            # Do not swallow: defaulting to True would score an unverified
+            # statement as faithful and inflate the reported metric (D-08).
+            raise
         except Exception as exc:
             logger.warning(f"[RAGASFaithfulness] Faithfulness check failed for statement: {exc}")
             return True  # Conservative default
@@ -580,7 +626,7 @@ class DeepEvalJudgeAgent:
                 ),
             },
         ]
-        return self._parse_llm_score(chat_generate(self.llm, messages), default=0.5)
+        return self._parse_llm_score(self._complete(messages), default=0.5)
 
     def _llm_score_compliance(
         self,
@@ -613,7 +659,7 @@ class DeepEvalJudgeAgent:
                 ),
             },
         ]
-        return self._parse_llm_score(chat_generate(self.llm, messages), default=0.5)
+        return self._parse_llm_score(self._complete(messages), default=0.5)
 
     # ------------------------------------------------------------------
     # Feedback builder

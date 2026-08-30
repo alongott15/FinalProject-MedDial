@@ -1,6 +1,6 @@
 import logging
 import random
-from Utils.llms_utils import load_gpt_model, chat_generate
+from meddial.llm import DataClassification, LLMProvider, to_chat_messages
 from Utils.bias_aware_prompts import BASE_SYSTEM_PROMPT, PATIENT_PROFILE_TYPE_KNOWLEDGE
 from Utils.conversation_variety import should_doctor_summarize, should_doctor_explain_reasoning, get_symptom_follow_up_question, DOCTOR_CLINICAL_REASONING, DOCTOR_EDUCATIONAL_PHRASES, create_varied_prompt_examples
 from Utils.repetition_filter import RepetitionTracker, detect_symptom_repetition
@@ -9,8 +9,21 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class DoctorAgent:
-    def __init__(self, patient_profile: dict = None):
-        self.llm = load_gpt_model(temperature=0.5, max_tokens=300)  # Increased for more natural variation
+    def __init__(
+        self,
+        provider: LLMProvider,
+        patient_profile: dict = None,
+        *,
+        temperature: float = 0.5,  # Higher than the summarizer for natural variation
+        max_tokens: int = 300,
+        seed: int | None = None,
+    ):
+        # Injected, never constructed here, so the run manifest records one
+        # model configuration for the whole run (GOV-4).
+        self._provider = provider
+        self._temperature = temperature
+        self._max_tokens = max_tokens
+        self._seed = seed
         self.patient_profile = patient_profile
         self.coach_feedback_to_incorporate = None
         self.conversation_phase = "opening"
@@ -325,7 +338,15 @@ class DoctorAgent:
 
         llm_messages.append({"role": "user", "content": user_prompt_for_next_turn})
 
-        response_content = chat_generate(self.llm, llm_messages)
+        # A ProviderError propagates rather than becoming an utterance (D-08).
+        response_content = self._provider.complete(
+            to_chat_messages(llm_messages),
+            # The profile is derived from a MIMIC-III note.
+            classification=DataClassification.RESTRICTED_CLINICAL,
+            temperature=self._temperature,
+            max_tokens=self._max_tokens,
+            seed=self._seed,
+        ).text
 
         # Track this response for repetition detection
         self.repetition_tracker.track_response(response_content)

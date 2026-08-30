@@ -1,6 +1,6 @@
 import logging
 from typing import Dict
-from Utils.llms_utils import load_gpt_model, chat_generate
+from meddial.llm import DataClassification, LLMProvider, to_chat_messages
 from Utils.bias_aware_prompts import EHR_SUMMARIZER_PROMPT
 
 logging.basicConfig(level=logging.INFO)
@@ -14,18 +14,28 @@ class EHRSummarizerAgent:
     Only extracts information clearly present in the text.
     """
 
-    def __init__(self, llm=None):
+    def __init__(
+        self,
+        provider: LLMProvider,
+        *,
+        temperature: float = 0.1,
+        max_tokens: int = 400,
+        seed: int | None = None,
+    ):
         """
         Initialize EHRSummarizerAgent.
 
         Args:
-            llm: Language model client (if None, will load default)
+            provider: Provider to use. Injected, never constructed here, so the
+                run manifest records one model configuration for the whole run.
+            temperature: Sampling temperature.
+            max_tokens: Completion budget.
+            seed: Sampling seed, when the provider honours one.
         """
-        if llm:
-            self.llm = llm
-        else:
-            logger.info("Loading LLM for EHRSummarizerAgent")
-            self.llm = load_gpt_model(temperature=0.1, max_tokens=400)
+        self._provider = provider
+        self._temperature = temperature
+        self._max_tokens = max_tokens
+        self._seed = seed
 
     def summarize(self, ehr_text: str, metadata: Dict = None) -> str:
         """
@@ -37,6 +47,11 @@ class EHRSummarizerAgent:
 
         Returns:
             Summary string (5-8 sentences)
+
+        Raises:
+            ProviderError: If the model call fails. The failure is not caught
+                here — a placeholder summary would silently become the
+                grounding for a whole dialogue (D-08).
         """
         logger.info("Summarizing EHR text...")
 
@@ -65,11 +80,13 @@ Provide a concise summary (5-8 sentences) covering:
 Summary:"""}
         ]
 
-        try:
-            summary = chat_generate(self.llm, messages)
-            logger.info(f"EHR summary generated: {len(summary)} characters")
-            return summary.strip()
-
-        except Exception as e:
-            logger.error(f"Error summarizing EHR: {e}")
-            return "Unable to generate summary"
+        result = self._provider.complete(
+            to_chat_messages(messages),
+            # The note is MIMIC-III text, so only a local provider may see it.
+            classification=DataClassification.RESTRICTED_CLINICAL,
+            temperature=self._temperature,
+            max_tokens=self._max_tokens,
+            seed=self._seed,
+        )
+        logger.info(f"EHR summary generated: {len(result.text)} characters")
+        return result.text.strip()

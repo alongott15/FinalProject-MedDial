@@ -1,5 +1,5 @@
 import logging
-from Utils.llms_utils import load_gpt_model, chat_generate
+from meddial.llm import DataClassification, LLMProvider, to_chat_messages
 from Utils.bias_aware_prompts import BASE_SYSTEM_PROMPT, PATIENT_PROFILE_TYPE_KNOWLEDGE
 from Utils.conversation_variety import PatientPersonality, create_varied_prompt_examples
 from Utils.repetition_filter import RepetitionTracker
@@ -9,12 +9,21 @@ logger = logging.getLogger(__name__)
 
 
 class PatientAgent:
-    def __init__(self, profile: dict, llm=None):
-        if llm:
-            self.llm = llm
-        else:
-            logger.info("LLM not provided to PatientAgent, loading Azure AI model internally.")
-            self.llm = load_gpt_model(temperature=0.6, max_tokens=300)
+    def __init__(
+        self,
+        profile: dict,
+        provider: LLMProvider,
+        *,
+        temperature: float = 0.6,
+        max_tokens: int = 300,
+        seed: int | None = None,
+    ):
+        # Injected, never constructed here, so the run manifest records one
+        # model configuration for the whole run (GOV-4).
+        self._provider = provider
+        self._temperature = temperature
+        self._max_tokens = max_tokens
+        self._seed = seed
 
         self.profile = profile
         self.coach_feedback_to_incorporate = None
@@ -460,7 +469,15 @@ class PatientAgent:
             )
             llm_messages.append({"role": "user", "content": user_prompt_for_next_turn})
 
-        response_content = chat_generate(self.llm, llm_messages)
+        # A ProviderError propagates rather than becoming an utterance (D-08).
+        response_content = self._provider.complete(
+            to_chat_messages(llm_messages),
+            # The profile is derived from a MIMIC-III note.
+            classification=DataClassification.RESTRICTED_CLINICAL,
+            temperature=self._temperature,
+            max_tokens=self._max_tokens,
+            seed=self._seed,
+        ).text
 
         # Track this response for repetition detection
         self.repetition_tracker.track_response(response_content)

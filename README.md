@@ -51,13 +51,27 @@ cd FinalProject-MedDial
 pip install -e ".[dev]"
 ```
 
-Configure LLM provider credentials via environment variables (create a
-`.env` file; see `.env.example` once added):
+## Model providers
+
+Generation runs against a locally served OpenAI-compatible endpoint (Ollama
+or vLLM). This is not a preference: MIMIC-III notes and everything derived
+from them are classified `RESTRICTED_CLINICAL`, and the provider layer
+refuses to send restricted payloads to a hosted API before it opens a
+socket. `AzureProvider` exists for public and synthetic payloads only.
+
+Point the generator and judge at their models. Use different model families
+for the two — a judge scoring its own family's output is not independent
+evidence:
 
 ```text
-AZURE_AI_ENDPOINT=your_azure_ai_endpoint
-AZURE_AI_API_KEY=your_azure_ai_api_key
+MEDDIAL_GENERATOR_BASE_URL=http://localhost:11434/v1
+MEDDIAL_GENERATOR_MODEL=llama3.1:8b
+MEDDIAL_JUDGE_BASE_URL=http://localhost:11434/v1
+MEDDIAL_JUDGE_MODEL=qwen2.5:14b
 ```
+
+The weight digest is resolved from the running server at startup, so a run
+cannot begin against weights it cannot identify.
 
 ## Running the hygiene guard and tests
 

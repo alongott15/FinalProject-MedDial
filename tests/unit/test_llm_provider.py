@@ -1,0 +1,231 @@
+"""W1 tests for the provider and compliance layer.
+
+Covers PRD GOV-3 (classification gate before I/O), GOV-4 (provider
+injection), EXP-7 (weight provenance) and defect D-08 (errors raised, never
+returned as text).
+"""
+
+from __future__ import annotations
+
+import httpx
+import pytest
+
+from meddial.llm import (
+    AzureProvider,
+    DataClassification,
+    LocalOpenAICompatibleProvider,
+    MockProvider,
+    ProviderClassificationError,
+    ProviderConfigurationError,
+    ProviderRateLimitError,
+    ProviderResponseError,
+    ProviderTimeoutError,
+)
+from meddial.llm.provider import ChatMessage
+
+RESTRICTED = DataClassification.RESTRICTED_CLINICAL
+SYNTHETIC = DataClassification.SYNTHETIC
+
+MESSAGES = [
+    ChatMessage(role="system", content="You are a patient."),
+    ChatMessage(role="user", content="What brings you in today?"),
+]
+
+
+class _ExplodingClient:
+    """Any use of this client is a governance failure, so it fails the test."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete(self, **_: object) -> object:
+        self.calls += 1
+        raise AssertionError("A restricted payload reached the Azure transport.")
+
+
+def _ok_response(text: str = "Chest pain since this morning.") -> dict[str, object]:
+    return {
+        "choices": [{"message": {"role": "assistant", "content": text}}],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 5},
+    }
+
+
+def _local_provider(handler: httpx.MockTransport, **kwargs: object):
+    return LocalOpenAICompatibleProvider(
+        "http://localhost:11434/v1",
+        "llama3.1:8b",
+        model_digest="sha256:abc123",
+        model_family="llama",
+        quantisation="Q4_K_M",
+        client=httpx.Client(transport=handler),
+        sleep=lambda _seconds: None,
+        **kwargs,
+    )
+
+
+def test_restricted_call_to_azure_raises_before_network() -> None:
+    """C2: MIMIC-derived text must not reach a hosted API, not even once."""
+    transport = _ExplodingClient()
+    provider = AzureProvider(
+        "gpt-4o",
+        model_family="gpt",
+        endpoint="https://example.invalid",
+        api_key="unused",
+        client=transport,
+    )
+
+    with pytest.raises(ProviderClassificationError) as excinfo:
+        provider.complete(
+            MESSAGES,
+            classification=RESTRICTED,
+            temperature=0.7,
+            max_tokens=256,
+        )
+
+    assert transport.calls == 0
+    assert "restricted_clinical" in str(excinfo.value)
+
+
+def test_azure_accepts_synthetic_payloads() -> None:
+    """The gate must not be so blunt that it blocks approved traffic."""
+    provider = AzureProvider("gpt-4o", model_family="gpt", client=_ExplodingClient())
+
+    # Raises from the exploding transport, not from the classification gate.
+    with pytest.raises(ProviderResponseError):
+        provider.complete(
+            MESSAGES, classification=SYNTHETIC, temperature=0.7, max_tokens=16
+        )
+
+
+def test_local_provider_is_approved_for_restricted_data() -> None:
+    """D2: local serving is what makes restricted generation permissible."""
+    provider = _local_provider(
+        httpx.MockTransport(lambda _request: httpx.Response(200, json=_ok_response()))
+    )
+    result = provider.complete(
+        MESSAGES, classification=RESTRICTED, temperature=0.7, max_tokens=256
+    )
+    assert result.text == "Chest pain since this morning."
+
+
+@pytest.mark.parametrize(
+    ("responder", "expected"),
+    [
+        (lambda _r: httpx.Response(429), ProviderRateLimitError),
+        (lambda _r: httpx.Response(500, text="upstream exploded"), ProviderResponseError),
+        (lambda _r: httpx.Response(200, json={"choices": []}), ProviderResponseError),
+        (
+            lambda _r: httpx.Response(
+                200, json={"choices": [{"message": {"content": "   "}}]}
+            ),
+            ProviderResponseError,
+        ),
+    ],
+)
+def test_provider_error_raises_not_returns_string(responder, expected) -> None:
+    """D-08: every failure mode raises, so none can be scored as an utterance."""
+    provider = _local_provider(httpx.MockTransport(responder))
+
+    with pytest.raises(expected) as excinfo:
+        provider.complete(
+            MESSAGES, classification=RESTRICTED, temperature=0.7, max_tokens=256
+        )
+
+    assert "[ERROR:" not in str(excinfo.value)
+
+
+def test_provider_timeout_raises_timeout_error() -> None:
+    def _timeout(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("too slow", request=request)
+
+    provider = _local_provider(httpx.MockTransport(_timeout))
+
+    with pytest.raises(ProviderTimeoutError):
+        provider.complete(
+            MESSAGES, classification=RESTRICTED, temperature=0.7, max_tokens=256
+        )
+
+
+def test_call_metadata_records_digest_and_quant() -> None:
+    """EXP-7/C8: a result must name the artefact that produced it."""
+    provider = _local_provider(
+        httpx.MockTransport(lambda _request: httpx.Response(200, json=_ok_response()))
+    )
+
+    metadata = provider.complete(
+        MESSAGES,
+        classification=RESTRICTED,
+        temperature=0.3,
+        max_tokens=256,
+        seed=7,
+    ).metadata
+
+    assert metadata.model_digest == "sha256:abc123"
+    assert metadata.quantisation == "Q4_K_M"
+    assert metadata.model_family == "llama"
+    assert metadata.seed == 7
+    assert metadata.temperature == 0.3
+    assert metadata.prompt_tokens == 11
+    assert metadata.completion_tokens == 5
+    assert metadata.classification is RESTRICTED
+    assert metadata.provider_class == "LocalOpenAICompatibleProvider"
+
+
+def test_local_provider_refuses_to_start_without_a_digest() -> None:
+    """A run whose weights cannot be identified must not begin."""
+    with pytest.raises(ProviderConfigurationError, match="model_digest"):
+        LocalOpenAICompatibleProvider(
+            "http://localhost:11434/v1",
+            "llama3.1:8b",
+            model_digest="",
+            model_family="llama",
+            quantisation="Q4_K_M",
+        )
+
+
+def test_mock_provider_is_deterministic() -> None:
+    """Pipeline tests must not depend on sampling."""
+    first = MockProvider().complete(
+        MESSAGES, classification=RESTRICTED, temperature=0.7, max_tokens=64, seed=42
+    )
+    second = MockProvider().complete(
+        MESSAGES, classification=RESTRICTED, temperature=0.7, max_tokens=64, seed=42
+    )
+    other_seed = MockProvider().complete(
+        MESSAGES, classification=RESTRICTED, temperature=0.7, max_tokens=64, seed=43
+    )
+
+    assert first.text == second.text
+    assert first.metadata.model_digest == second.metadata.model_digest
+    assert first.text != other_seed.text
+
+
+def test_mock_provider_honours_its_own_classification_gate() -> None:
+    provider = MockProvider(approved=frozenset({DataClassification.PUBLIC}))
+
+    with pytest.raises(ProviderClassificationError):
+        provider.complete(
+            MESSAGES, classification=RESTRICTED, temperature=0.7, max_tokens=64
+        )
+    assert provider.calls == []
+
+
+def test_network_kill_switch_blocks_real_providers(monkeypatch) -> None:
+    """CI sets this so a stray real call fails loudly instead of dialling out."""
+    monkeypatch.setenv("MEDDIAL_DISABLE_EXTERNAL_CALLS", "1")
+    provider = _local_provider(
+        httpx.MockTransport(lambda _request: httpx.Response(200, json=_ok_response()))
+    )
+
+    with pytest.raises(ProviderConfigurationError, match="MEDDIAL_DISABLE_EXTERNAL_CALLS"):
+        provider.complete(
+            MESSAGES, classification=RESTRICTED, temperature=0.7, max_tokens=64
+        )
+
+
+def test_network_kill_switch_does_not_block_the_mock(monkeypatch) -> None:
+    monkeypatch.setenv("MEDDIAL_DISABLE_EXTERNAL_CALLS", "1")
+    result = MockProvider(["hello"]).complete(
+        MESSAGES, classification=RESTRICTED, temperature=0.7, max_tokens=64
+    )
+    assert result.text == "hello"
