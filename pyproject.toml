@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meddial"
+version = "0.1.0"
+description = "Synthetic patient-physician dialogue generation and evaluation research framework"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "Alon Gottlib" }]
+dependencies = [
+  "pydantic>=2.8,<3.0",
+  "python-dotenv>=1.0,<2.0",
+  "pandas>=2.0,<3.0",
+  "nltk>=3.8,<4.0",
+  "rouge-score>=0.1.2,<0.2",
+  "scikit-learn>=1.4,<2.0",
+  "sentence-transformers>=2.7,<3.0",
+  "transformers>=4.40,<5.0",
+  "torch>=2.2,<3.0",
+  "deepeval>=0.21,<1.0",
+]
+
+[project.optional-dependencies]
+azure = [
+  "azure-ai-inference>=1.0.0b9,<2.0",
+  "azure-core>=1.30,<2.0",
+]
+dev = [
+  "pytest>=8.3,<9.0",
+  "ruff>=0.8,<1.0",
+  "mypy>=1.13,<2.0",
+]
+
+[tool.setuptools]
+include-package-data = true
+py-modules = ["dialogue_generation_framework", "gtmf_creation", "simulation"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["Agents*", "Models*", "Utils*", "scripts*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+ignore_missing_imports = true

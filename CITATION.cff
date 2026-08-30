@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: If you use this software, please cite it as below.
+title: MedDial
+abstract: >-
+  A multi-agent LLM pipeline for generating synthetic patient-physician
+  dialogues from clinical notes, with a role-aware, provenance-tracked
+  evaluation instrument for measuring dialogue faithfulness and
+  knowledge-boundary leakage.
+authors:
+  - family-names: Gottlib
+    given-names: Alon
+license: MIT
+repository-code: https://github.com/alongott15/FinalProject-MedDial
+type: software
+date-released: "2026-08-26"
+version: 0.1.0

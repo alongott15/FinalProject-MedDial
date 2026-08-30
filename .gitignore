@@ -1,14 +1,51 @@
-/.env
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Python environments and caches
+.venv/
+venv/
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-/.vscode
-Agents/__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.deepeval
-.vscode
-.Agents\__pycache__
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.deepeval/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+
+# Local agent/developer tooling (regenerable, not project deliverables)
+.claude/
+.serena/
+graphify-out/
+node_modules/
+package.json
+package-lock.json
+
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# Protected/local datasets (do not commit MIMIC exports)
+data/
+private/
+MIMIC*/
+NOTEEVENTS.csv
+PATIENTS.csv
+ADMISSIONS.csv
+MTS-Dialog/*.csv
+cohort_review*.json
+*private_manifest*.json
+
+# Generated SCRs, cohort manifests, dialogue runs, and analysis artifacts
+gtmf/*
+output_dialogue_framework/*
+runs/
+outputs/
