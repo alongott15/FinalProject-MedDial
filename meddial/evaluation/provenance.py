@@ -23,6 +23,9 @@ from typing import Any
 
 from meddial.llm import CallMetadata
 
+DETERMINISTIC = "deterministic"
+"""Placed in the model fields of a scorer that makes no model call (EVAL-9)."""
+
 
 class EvaluationStatus(str, Enum):
     """Outcome of one measurement."""
@@ -55,7 +58,7 @@ class TurnScope(str, Enum):
 
     PATIENT = "patient"
     DOCTOR = "doctor"
-    ALL = "all"
+    BOTH = "both"
 
 
 @dataclass(frozen=True)
@@ -67,12 +70,17 @@ class ScoreProvenance:
     model_id: str
     model_digest: str
     quantisation: str
-    reference_mode: ReferenceMode
+    reference_mode: ReferenceMode | None
     turn_scope: TurnScope
     prompt_version: str
     sampling: Mapping[str, Any]
     fallback_used: bool = False
     incomplete_reason: str | None = None
+
+    @property
+    def used_a_model(self) -> bool:
+        """False for deterministic scorers, which consult no weights (EVAL-9)."""
+        return self.model_digest != DETERMINISTIC
 
     @classmethod
     def from_call(
@@ -97,6 +105,28 @@ class ScoreProvenance:
             prompt_version=prompt_version,
             sampling={"temperature": metadata.temperature, "seed": metadata.seed},
             incomplete_reason=incomplete_reason,
+        )
+
+    @classmethod
+    def deterministic(
+        cls, *, scorer_id: str, turn_scope: TurnScope = TurnScope.BOTH
+    ) -> ScoreProvenance:
+        """Provenance for a scorer that makes no model call.
+
+        ``reference_mode`` is ``None`` rather than an arbitrary choice: a
+        structural check consults no reference, and recording one it did not
+        use would misattribute the number.
+        """
+        return cls(
+            scorer_id=scorer_id,
+            model_family=DETERMINISTIC,
+            model_id=DETERMINISTIC,
+            model_digest=DETERMINISTIC,
+            quantisation=DETERMINISTIC,
+            reference_mode=None,
+            turn_scope=turn_scope,
+            prompt_version=DETERMINISTIC,
+            sampling={},
         )
 
     @classmethod

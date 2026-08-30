@@ -12,11 +12,11 @@ close them before the results can support a publication. See those documents
 for the full specification; this README describes only what exists in the
 repository today.
 
-**Status:** repository hygiene (W0), the provider layer (W1) and the knowledge
-policy layer (W2) are complete. The evaluation rebuild (W3) is partly done:
-claim extraction, score provenance and batched faithfulness are in place;
-naturalness, boundary, structural and acceptance scoring are not. No MIMIC-III
-derived data ships in this repository — see [Data](#data) below.
+**Status:** repository hygiene (W0), the provider layer (W1), the knowledge
+policy layer (W2) and the evaluation rebuild (W3) are complete, except for the
+evaluator ensemble, which is deferred until the E0 measurement-confound
+experiment reports. No MIMIC-III derived data ships in this repository — see
+[Data](#data) below.
 
 ## What's here
 
@@ -24,7 +24,7 @@ derived data ships in this repository — see [Data](#data) below.
 |---|---|
 | `Agents/` | LLM agents: `PatientAgent`, `DoctorAgent`, `DeepEvalJudgeAgent`, `EHRSummarizerAgent`, `PromptImprovementAgent` |
 | `meddial/knowledge/` | Structured Clinical Reference, field paths, index-diagnosis redaction, knowledge policies, per-participant contexts |
-| `meddial/evaluation/` | Claim extraction, batched claim verification, role-separated faithfulness, score provenance |
+| `meddial/evaluation/` | Claim extraction, batched claim verification, role-separated faithfulness, naturalness, knowledge-boundary leakage, deterministic structural validity, acceptance gates, score provenance |
 | `meddial/evaluation/templates/` | Evaluator prompts as versioned files; a score records the hash of the template that produced it |
 | `configs/policies/` | Knowledge policies as data — one JSON file per disclosure arm, hash-locked by `POLICY_HASHES.json` |
 | `Utils/` | Prompt templates, dialogue markdown I/O, repetition filtering |
@@ -105,8 +105,15 @@ Set it explicitly to vary disclosure and physician guidance independently.
 
 ## Evaluation
 
+Five dimensions are scored: `patient_factuality`, `doctor_factuality`,
+`knowledge_boundary`, `naturalness` and `structural_validity`. A dialogue is
+accepted only if it passes every one of them; the thesis composite
+(0.4 naturalness + 0.3 compliance + 0.3 faithfulness) is still computed and
+reported, but it is excluded from the decision, so a strong average can no
+longer offset a leaked diagnosis.
+
 A faithfulness number is only evidence if you know what produced it, so
-`meddial/evaluation/` makes four things explicit that the prior
+`meddial/evaluation/` makes six things explicit that the prior
 implementation left implicit:
 
 - **Both speakers are scored.** Claims are extracted from every turn and
@@ -124,6 +131,18 @@ implementation left implicit:
 - **Unmeasurable means `INCOMPLETE`, not zero.** A dialogue with no factual
   claims, or a judge whose verdicts cannot be aligned to the claims it was
   asked about, produces no value and a reason. Nothing defaults into a mean.
+  There is no fallback scorer: the naturalness scorer that used to catch any
+  exception and switch to an unrecorded second scorer has been deleted.
+- **Leakage is a located event, not a rate.** Each event names the turn, the
+  reference field path it revealed and a verbatim excerpt, and the detector
+  cannot cite a path outside the schema or count a field the speaker was
+  permitted to know. Under the `FULL` policy nothing is left to leak, so its
+  zero-leakage result is definitional; every score records this as
+  `permissible_is_total`.
+- **Structural validity consults no model.** Role alternation, empty turns,
+  turn bounds, duplicate turns, symptom repetition and provider-error
+  sentinels are checked deterministically, so structural validity can never
+  be the reason two runs of the same cohort disagree.
 
 Verification is one call per dialogue returning a verdict array, validated
 by count and by index; a mismatch is retried once and then reported as

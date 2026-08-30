@@ -19,6 +19,17 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+class JudgeEvaluationError(Exception):
+    """A dimension could not be measured.
+
+    Raised instead of returning a substitute number (EVAL-4, defect D-06).
+    The scorer that used to catch these exceptions and quietly switch to an
+    ad-hoc direct-LLM scorer has been deleted: a value in a results table must
+    come from the scorer its provenance names, and a dimension that cannot be
+    measured is reported as unmeasured.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Azure AI Foundry → deepeval adapter
 # ---------------------------------------------------------------------------
@@ -285,8 +296,7 @@ class DeepEvalJudgeAgent:
             return score
 
         except Exception as exc:
-            logger.warning(f"[Naturalness] GEval failed ({exc}); falling back to direct LLM scoring.")
-            return self._llm_score_naturalness(dialogue_transcript, profile_summary)
+            raise JudgeEvaluationError(f"naturalness GEval failed: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Metric 2 — Patient Profile Compliance (GEval)
@@ -358,8 +368,7 @@ class DeepEvalJudgeAgent:
             return score
 
         except Exception as exc:
-            logger.warning(f"[ProfileCompliance] GEval failed ({exc}); falling back to direct LLM scoring.")
-            return self._llm_score_compliance(patient_turns, patient_profile, profile_type)
+            raise JudgeEvaluationError(f"profile compliance GEval failed: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Metric 3 — RAGAS Faithfulness (manual, Azure AI Foundry)
@@ -566,8 +575,9 @@ class DeepEvalJudgeAgent:
         the patient's allowed profile context.
 
         Returns ``True`` if the statement is grounded (faithful), ``False``
-        otherwise.  Errors conservatively default to faithful (``True``) to
-        avoid penalising the dialogue for tool failures.
+        otherwise. Failures raise. There is no conservative default: scoring
+        an unverified statement as faithful inflates the reported metric,
+        which is the failure mode D-08 and D-06 exist to prevent.
         """
         messages = [
             {
@@ -592,74 +602,13 @@ class DeepEvalJudgeAgent:
 
         try:
             response = self._complete(messages).strip().lower()
-            return response.startswith("yes")
         except ProviderError:
             # Do not swallow: defaulting to True would score an unverified
             # statement as faithful and inflate the reported metric (D-08).
             raise
         except Exception as exc:
-            logger.warning(f"[RAGASFaithfulness] Faithfulness check failed for statement: {exc}")
-            return True  # Conservative default
-
-    # ------------------------------------------------------------------
-    # Fallback LLM-based scorers (used when GEval raises exceptions)
-    # ------------------------------------------------------------------
-
-    def _llm_score_naturalness(
-        self, dialogue_transcript: str, profile_summary: str
-    ) -> float:
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Rate the naturalness of this medical dialogue on a scale from 0.0 "
-                    "(completely unrealistic) to 1.0 (perfectly natural). "
-                    'Respond ONLY with valid JSON: {"score": <float>, "reason": "<brief>"}'
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Patient profile:\n{profile_summary}\n\n"
-                    f"Dialogue:\n{dialogue_transcript}\n\n"
-                    "Rate naturalness (0.0–1.0):"
-                ),
-            },
-        ]
-        return self._parse_llm_score(self._complete(messages), default=0.5)
-
-    def _llm_score_compliance(
-        self,
-        patient_turns: List[str],
-        patient_profile: dict,
-        profile_type: str,
-    ) -> float:
-        knowledge = PATIENT_PROFILE_TYPE_KNOWLEDGE.get(
-            profile_type,
-            PATIENT_PROFILE_TYPE_KNOWLEDGE["NO_DIAGNOSIS_NO_TREATMENT"],
-        )
-        patient_text = "\n".join(f"Patient: {t}" for t in patient_turns)
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Rate patient profile compliance from 0.0 (patient reveals forbidden info) "
-                    "to 1.0 (patient perfectly follows their knowledge boundaries). "
-                    'Respond ONLY with valid JSON: {"score": <float>, "reason": "<brief>"}'
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Profile type: {profile_type}\n"
-                    f"What patient should know: {knowledge['description']}\n"
-                    f"Disclosure rules: {knowledge['disclosure_rules']}\n\n"
-                    f"Patient utterances:\n{patient_text}\n\n"
-                    "Rate profile compliance (0.0–1.0):"
-                ),
-            },
-        ]
-        return self._parse_llm_score(self._complete(messages), default=0.5)
+            raise JudgeEvaluationError(f"faithfulness check failed: {exc}") from exc
+        return response.startswith("yes")
 
     # ------------------------------------------------------------------
     # Feedback builder
@@ -767,25 +716,6 @@ class DeepEvalJudgeAgent:
             for turn in dialogue
             if turn.get("role", "").lower() == "patient"
         ]
-
-    def _parse_llm_score(self, response: str, default: float = 0.5) -> float:
-        """Parse a float score from a JSON LLM response."""
-        try:
-            m = re.search(r"\{.*?\}", response, re.DOTALL)
-            if m:
-                data = json.loads(m.group(0))
-                return max(0.0, min(1.0, float(data.get("score", default))))
-        except Exception:
-            pass
-
-        m = re.search(r"\b(0\.\d+|1\.0|0|1)\b", response)
-        if m:
-            try:
-                return max(0.0, min(1.0, float(m.group(1))))
-            except Exception:
-                pass
-
-        return default
 
     # ------------------------------------------------------------------
     # Compatibility helpers (mirrors JudgeAgent public API)

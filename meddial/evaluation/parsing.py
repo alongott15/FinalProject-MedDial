@@ -41,6 +41,19 @@ def parse_json_objects(text: str) -> list[dict[str, Any]]:
     return parsed
 
 
+def parse_json_object(text: str) -> dict[str, Any]:
+    """Extract a single JSON object from a model response."""
+    payload = _isolate(text, "{", "}")
+    try:
+        parsed = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise ResponseFormatError(f"response is not valid JSON: {exc}") from exc
+
+    if not isinstance(parsed, dict):
+        raise ResponseFormatError(f"expected a JSON object, got {type(parsed).__name__}")
+    return parsed
+
+
 def require_keys(item: dict[str, Any], keys: tuple[str, ...], *, position: int) -> None:
     """Reject an element missing any required key."""
     missing = [key for key in keys if key not in item]
@@ -49,18 +62,22 @@ def require_keys(item: dict[str, Any], keys: tuple[str, ...], *, position: int) 
 
 
 def _isolate_array(text: str) -> str:
+    return _isolate(text, "[", "]")
+
+
+def _isolate(text: str, opener: str, closer: str) -> str:
     stripped = text.strip()
     if _FENCE in stripped:
         blocks = stripped.split(_FENCE)
-        # Odd indices are fenced blocks; take the first that looks like an array.
+        # Odd indices are fenced blocks; take the first holding the payload.
         for block in blocks[1::2]:
             body = block.split("\n", 1)[-1] if block.lstrip().lower().startswith("json") else block
-            if "[" in body:
+            if opener in body:
                 stripped = body.strip()
                 break
 
-    start = stripped.find("[")
-    end = stripped.rfind("]")
+    start = stripped.find(opener)
+    end = stripped.rfind(closer)
     if start == -1 or end == -1 or end < start:
-        raise ResponseFormatError("no JSON array found in response")
+        raise ResponseFormatError(f"no JSON {'array' if opener == '[' else 'object'} in response")
     return stripped[start : end + 1]
