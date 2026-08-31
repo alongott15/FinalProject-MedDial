@@ -82,6 +82,22 @@ class ScoreProvenance:
         """False for deterministic scorers, which consult no weights (EVAL-9)."""
         return self.model_digest != DETERMINISTIC
 
+    def as_record(self) -> dict[str, Any]:
+        """The shape PRD §6.4 stores under ``provenance``."""
+        return {
+            "scorer_id": self.scorer_id,
+            "model_family": self.model_family,
+            "model_id": self.model_id,
+            "model_digest": self.model_digest,
+            "quantisation": self.quantisation,
+            "reference_mode": None if self.reference_mode is None else self.reference_mode.value,
+            "turn_scope": self.turn_scope.value,
+            "prompt_version": self.prompt_version,
+            "sampling": dict(self.sampling),
+            "fallback_used": self.fallback_used,
+            "incomplete_reason": self.incomplete_reason,
+        }
+
     @classmethod
     def from_call(
         cls,
@@ -187,6 +203,15 @@ class Score:
                 raise ValueError(f"a {self.status.value} score must carry a value")
             if not 0.0 <= self.value <= 1.0:
                 raise ValueError(f"score value {self.value} outside [0, 1]")
+
+    def as_record(self) -> dict[str, Any]:
+        """The shape PRD §4.2 stores under ``evaluation.scores[<dimension>]``."""
+        return {
+            "value": self.value,
+            "status": self.status.value,
+            "provenance": self.provenance.as_record(),
+            "detail": dict(self.detail),
+        }
 
     @classmethod
     def incomplete(

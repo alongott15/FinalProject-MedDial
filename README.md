@@ -15,8 +15,9 @@ repository today.
 **Status:** repository hygiene (W0), the provider layer (W1), the knowledge
 policy layer (W2) and the evaluation rebuild (W3) are complete, except for the
 evaluator ensemble, which is deferred until the E0 measurement-confound
-experiment reports. No MIMIC-III derived data ships in this repository — see
-[Data](#data) below.
+experiment reports. The E0 harness is built and tested but has not been run:
+it needs the existing dialogue corpus, which is not part of this repository.
+No MIMIC-III derived data ships here — see [Data](#data) below.
 
 ## What's here
 
@@ -26,6 +27,8 @@ experiment reports. No MIMIC-III derived data ships in this repository — see
 | `meddial/knowledge/` | Structured Clinical Reference, field paths, index-diagnosis redaction, knowledge policies, per-participant contexts |
 | `meddial/evaluation/` | Claim extraction, batched claim verification, role-separated faithfulness, naturalness, knowledge-boundary leakage, deterministic structural validity, acceptance gates, score provenance |
 | `meddial/evaluation/templates/` | Evaluator prompts as versioned files; a score records the hash of the template that produced it |
+| `meddial/stats/` | Case-clustered bootstrap, paired within-case comparison, Wilson intervals — the resampling unit is the case, not the dialogue |
+| `meddial/experiments/` | E0: re-scores an existing corpus under both reference modes and both roles, and reports the decomposition |
 | `configs/policies/` | Knowledge policies as data — one JSON file per disclosure arm, hash-locked by `POLICY_HASHES.json` |
 | `Utils/` | Prompt templates, dialogue markdown I/O, repetition filtering |
 | `agent_prompts/` | Prompt text files consumed by each agent |
@@ -33,6 +36,7 @@ experiment reports. No MIMIC-III derived data ships in this repository — see
 | `gtmf_creation.py` | Extracts Ground Truth Medical Forms (GTMF) from clinical notes |
 | `simulation.py` | Runs a single doctor–patient dialogue turn-by-turn |
 | `scripts/check_repository_hygiene.py` | CI guard: fails the build if restricted or identifier-shaped paths are present |
+| `scripts/run_e0.py` | Runs E0 tests 1–2 against a local judge; resumable, and refuses to write its output inside the repository |
 | `tests/` | Test suite (currently: repository hygiene guard) |
 | `.github/workflows/ci.yml` | CI: restricted-artifact guard, secret scan, test suite |
 
@@ -148,6 +152,41 @@ Verification is one call per dialogue returning a verdict array, validated
 by count and by index; a mismatch is retried once and then reported as
 incomplete. The per-claim path is retained only as the baseline that
 batching is measured against.
+
+## The E0 experiment
+
+E0 asks whether the reported rise in patient faithfulness under increasing
+disclosure restriction is a property of the dialogues or of the way they were
+measured. Two of its four confounds can be tested without regenerating
+anything, by re-scoring an existing corpus:
+
+1. **Reference scope** — the same dialogues scored against the policy context
+   and against the full reference.
+2. **Turn scope** — patient and doctor claims scored separately.
+
+```bash
+python scripts/run_e0.py \
+    --dialogues /path/outside/repo/dialogues.jsonl \
+    --references /path/outside/repo/references.jsonl \
+    --out /path/outside/repo/e0-run
+```
+
+Both inputs are JSONL. A dialogue line is
+`{"case_id", "dialogue_id", "policy", "dialogue": [{"role", "content"}, ...]}`;
+a reference line is `{"case_id", "reference": {...}}`, keyed by case so that
+the three policy arms of a case are scored against one identical reference.
+The output directory must sit outside the repository — every file the run
+writes is MIMIC-derived.
+
+Claims are extracted once per dialogue and reused across both reference modes,
+so the two modes cannot disagree because they were shown different claims. The
+run appends results as it goes and skips completed work on restart. Every
+figure in the report carries a 95% interval from a bootstrap that resamples
+**cases**, not dialogues: a case's three arms are correlated, and resampling
+them independently would understate every interval.
+
+The report decomposes; it does not conclude. Tests 3 and 4 require
+regeneration, and the manuscript framing is a decision for after all four.
 
 ## Running the hygiene guard and tests
 
