@@ -1,5 +1,8 @@
 import json
 import logging
+import os
+import re
+
 from meddial.knowledge import GTMF, Demographics
 from meddial.llm import (
     DataClassification,
@@ -10,12 +13,9 @@ from meddial.llm import (
     resolve_ollama_digest,
     to_chat_messages,
 )
-from Utils.utils import format_date, calculate_age
 from Utils.bias_aware_prompts import GTMF_CREATION_PROMPT
 from Utils.markdown_gtmf import save_gtmf_markdown
-import re
-import os
-
+from Utils.utils import calculate_age, format_date
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -284,16 +284,29 @@ def _repair_evidence_offsets(node, note_id: str, source_note: str) -> int:
     return repaired
 
 
+DEFAULT_CHUNK_CHARS = 12000
+"""Chunk size, sized to the serving context rather than to a 4k default.
+
+3,000 characters was chosen when Ollama served a 4,096-token window, where the
+~1,200-token JSON schema left room for little else. At a 16k window a median
+discharge summary (7,429 characters in this cohort) fits in one call and the
+90th percentile (12,752) in two, so the schema is sent once or twice per note
+instead of three or four times. Fewer calls also means fewer merges, and a
+merge across chunk boundaries is where an entity split in half goes missing.
+"""
+
+
 def extract_gtmf_chunked(
     medical_text: str,
     provider: LLMProvider,
     *,
     note_id: str = "source-note",
     max_tokens: int = 4096,
+    chunk_chars: int = DEFAULT_CHUNK_CHARS,
 ) -> GTMF:
     schema_json = GTMF.model_json_schema()
     chunks = _chunk_medical_text_with_offsets(
-        medical_text, max_chunk_size=3000, overlap=200
+        medical_text, max_chunk_size=chunk_chars, overlap=200
     )
 
     system_message = GTMF_CREATION_PROMPT + """

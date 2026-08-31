@@ -78,12 +78,40 @@ def test_a_directory_missing_a_required_table_says_which_one(tmp_path: Path) -> 
         MimicCsvSource(extract)
 
 
-def test_the_latest_discharge_summary_wins(tmp_path: Path) -> None:
-    """``chartdate DESC, row_id DESC`` cut to rank 1, as the SQL does."""
+def test_all_discharge_summaries_are_joined_in_filing_order(tmp_path: Path) -> None:
+    """The admission's documentation is the summary *and* its addenda."""
     records = _by_hadm(MimicCsvSource(_write_extract(tmp_path / "mimic")))
 
-    assert records[100].row_id == 12
-    assert records[100].note_text.startswith("NEWEST")
+    text = records[100].note_text
+    assert "older" in text and "NEWEST" in text
+    assert text.index("older") < text.index("NEWEST"), "ascending chartdate"
+    assert records[100].row_id == 12, "row_id reports the longest constituent"
+
+
+def test_a_short_addendum_does_not_displace_the_summary_it_amends(
+    tmp_path: Path,
+) -> None:
+    """MIMIC files addenda later and shorter than the note they amend.
+
+    Ranking by date and taking one row therefore read the addendum and never
+    saw the summary: 6.5% of a 1,000-case cohort, losing a median 6,132
+    characters, one case extracting a single entity from a 547-byte addendum
+    whose 9,024-byte summary sat unread beside it.
+    """
+    extract = _write_extract(tmp_path / "mimic")
+    summary = "SUMMARY " + ("Full clinical detail here. " * 60)
+    (extract / "NOTEEVENTS.csv").write_text(
+        "ROW_ID,SUBJECT_ID,HADM_ID,CHARTDATE,CATEGORY,TEXT\n"
+        f'21,1,100,2150-03-04,Discharge summary,"{summary}"\n'
+        '22,1,100,2150-03-09,Discharge summary,"ADDENDUM: made DNR/DNI."\n',
+        encoding="utf-8",
+    )
+
+    record = _by_hadm(MimicCsvSource(extract))[100]
+
+    assert "Full clinical detail" in record.note_text, "the summary is read"
+    assert "ADDENDUM" in record.note_text, "the addendum is not discarded"
+    assert record.row_id == 21, "the summary, not the addendum, identifies the note"
 
 
 def test_icd9_codes_are_normalised_and_deduplicated(tmp_path: Path) -> None:

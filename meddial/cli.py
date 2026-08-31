@@ -38,6 +38,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from gtmf_creation import DEFAULT_CHUNK_CHARS
 from meddial.analysis.tables import read_attempt_records, regenerate_tables
 from meddial.cohort import (
     DEFAULT_COHORT_SIZE,
@@ -270,6 +271,16 @@ def _scr_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quantisation", default="Q4_K_M")
     parser.add_argument("--limit", type=int, default=None, help="extract only the first N cases")
     parser.add_argument(
+        "--chunk-chars",
+        type=int,
+        default=DEFAULT_CHUNK_CHARS,
+        help=(
+            f"characters per extraction call [{DEFAULT_CHUNK_CHARS}]. Sized to the "
+            "serving context: a larger window means the JSON schema is sent once "
+            "per note rather than once per 3,000 characters."
+        ),
+    )
+    parser.add_argument(
         "--max-tokens",
         type=int,
         default=4096,
@@ -367,6 +378,7 @@ def scr_main(argv: list[str] | None = None) -> int:
                 provider,
                 note_id=case_id,
                 max_tokens=args.max_tokens,
+                chunk_chars=args.chunk_chars,
             )
         except ProviderError:
             # A provider outage is a run failure, not a case to skip: skipping
