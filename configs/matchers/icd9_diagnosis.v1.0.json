@@ -1,0 +1,71 @@
+{
+  "matcher_id": "icd9_diagnosis",
+  "version": "1.0",
+  "entity_kind": "diagnosis",
+  "frozen_at": "2026-08-31T00:00:00+00:00",
+  "rationale": "Lines a diagnosis named in a dialogue up against a DIAGNOSES_ICD row via its D_ICD_DIAGNOSES long title. Long titles are written in coding language, not clinical speech, so three things are stripped before comparison: coding qualifiers that carry no clinical content ('unspecified', 'not elsewhere classified'), grammatical filler, and punctuation. Abbreviations and synonyms are expanded from an explicit table so a reviewer can see every equivalence the matcher believes in. Two classes of equivalence are deliberately EXCLUDED. (1) Mappings from a modern clinical term onto ICD-9 coding vocabulary - COPD to 'chronic airway obstruction', coronary artery disease to 'coronary atherosclerosis' - belong in a coding crosswalk this project does not have; inventing them here would embed unvalidated clinical judgement in the instrument, and C1 forbids the human clinical input that would validate them. The measured recall on the fixture reports the cost of that exclusion. (2) Fuzzy string distance, which would match 'hypotension' to 'hypertension'. Description overlap uses Sorensen-Dice over token sets at 0.6, chosen so that a clinician's short term matches a long title padded with coding boilerplate ('pneumonia' vs 'pneumonia organism unspecified', 0.67) while a term sharing only a grammatical skeleton does not ('type ii respiratory failure' vs 'diabetes mellitus type ii', 0.50).",
+  "normalisation": [
+    "lowercase",
+    "strip_punctuation",
+    "collapse_whitespace",
+    "expand_abbreviations",
+    "apply_synonyms",
+    "drop_coding_qualifiers",
+    "drop_stopwords",
+    "collapse_whitespace"
+  ],
+  "granularities": [
+    "exact_code",
+    "exact_description",
+    "category_3digit",
+    "description_overlap"
+  ],
+  "description_overlap_threshold": 0.6,
+  "abbreviations": {
+    "chf": "congestive heart failure",
+    "copd": "chronic obstructive pulmonary disease",
+    "uti": "urinary tract infection",
+    "htn": "hypertension",
+    "cad": "coronary artery disease",
+    "mi": "myocardial infarction",
+    "afib": "atrial fibrillation",
+    "a fib": "atrial fibrillation",
+    "dm": "diabetes mellitus",
+    "t2dm": "type ii diabetes mellitus",
+    "ckd": "chronic kidney disease",
+    "arf": "acute renal failure",
+    "gerd": "gastroesophageal reflux disease",
+    "dvt": "deep vein thrombosis",
+    "cabg": "coronary artery bypass graft"
+  },
+  "synonyms": {
+    "renal failure": "kidney failure",
+    "heart attack": "myocardial infarction",
+    "high blood pressure": "hypertension",
+    "blood thinners": "anticoagulants",
+    "type 1": "type i",
+    "type 2": "type ii"
+  },
+  "coding_qualifiers": [
+    "without mention of complication",
+    "not stated as uncontrolled",
+    "not elsewhere classified",
+    "not otherwise specified",
+    "site not specified",
+    "unspecified type",
+    "unspecified",
+    "nos",
+    "nec"
+  ],
+  "stopwords": [
+    "of",
+    "the",
+    "and",
+    "or",
+    "due",
+    "to",
+    "in",
+    "with",
+    "by"
+  ]
+}

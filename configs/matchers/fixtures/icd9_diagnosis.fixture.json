@@ -1,0 +1,43 @@
+{
+  "fixture_id": "icd9_diagnosis.v1",
+  "matcher": "icd9_diagnosis@1.0",
+  "provenance": "Hand-built. The coded rows are ICD-9-CM codes and their public D_ICD_DIAGNOSES long titles, chosen because they are among the most frequently assigned codes in adult critical care. No MIMIC-III record contributed to this file. The extracted strings are how a clinician or a patient would name the same condition in speech. Cases marked 'known-hard' are expected to fail: a fixture the instrument scores 1.0 on measures nothing.",
+  "coded": [
+    {"code": "486", "description": "Pneumonia, organism unspecified"},
+    {"code": "4280", "description": "Congestive heart failure, unspecified"},
+    {"code": "41401", "description": "Coronary atherosclerosis of native coronary artery"},
+    {"code": "25000", "description": "Diabetes mellitus without mention of complication, type II or unspecified type, not stated as uncontrolled"},
+    {"code": "5849", "description": "Acute kidney failure, unspecified"},
+    {"code": "5990", "description": "Urinary tract infection, site not specified"},
+    {"code": "42731", "description": "Atrial fibrillation"},
+    {"code": "496", "description": "Chronic airway obstruction, not elsewhere classified"},
+    {"code": "2851", "description": "Acute posthemorrhagic anemia"},
+    {"code": "4019", "description": "Unspecified essential hypertension"},
+    {"code": "5070", "description": "Pneumonitis due to inhalation of food or vomitus"},
+    {"code": "V5861", "description": "Long-term (current) use of anticoagulants"}
+  ],
+  "cases": [
+    {"extracted": "CHF", "expects": "4280", "note": "abbreviation table, then exact description"},
+    {"extracted": "congestive heart failure", "expects": "4280", "note": "exact once the 'unspecified' qualifier is dropped"},
+    {"extracted": "heart failure", "expects": "4280", "note": "under-specified but unambiguous among these rows"},
+    {"extracted": "pneumonia", "expects": "486", "note": "the long title's 'organism' is coding boilerplate"},
+    {"extracted": "UTI", "expects": "5990", "note": "abbreviation, plus 'site not specified' dropped"},
+    {"extracted": "urinary tract infection", "expects": "5990", "note": "exact after qualifier removal"},
+    {"extracted": "acute renal failure", "expects": "5849", "note": "synonym table: renal failure -> kidney failure"},
+    {"extracted": "ARF", "expects": "5849", "note": "abbreviation then synonym, chained in that order"},
+    {"extracted": "a-fib", "expects": "42731", "note": "punctuation stripped before the abbreviation table is consulted"},
+    {"extracted": "atrial fibrillation", "expects": "42731", "note": "exact description"},
+    {"extracted": "type 2 diabetes", "expects": "25000", "note": "arabic-to-roman synonym; the long title is mostly qualifiers"},
+    {"extracted": "high blood pressure", "expects": "4019", "note": "lay term via the synonym table"},
+    {"extracted": "HTN", "expects": "4019", "note": "abbreviation"},
+    {"extracted": "long-term use of anticoagulants", "expects": "V5861", "note": "V-code; overlap survives the parenthetical '(current)'"},
+    {"extracted": "coronary artery disease", "expects": "41401", "note": "known-hard. 0.57 overlap against 'coronary atherosclerosis of native coronary artery'. Bridging it needs an ICD-9 crosswalk, which is excluded by the spec's rationale."},
+    {"extracted": "COPD", "expects": "496", "note": "known-hard. The abbreviation expands correctly, but 'chronic obstructive pulmonary disease' and the ICD-9 phrasing 'chronic airway obstruction' share only one token."},
+    {"extracted": "anemia", "expects": "2851", "note": "known-hard. The extraction is less specific than the code; 0.50 overlap falls below threshold. Counted as a miss rather than credited, because a match here would also license matching any anemia to this code."},
+    {"extracted": "aspiration pneumonia", "expects": "5070", "note": "known-hard. The ICD-9 title describes the mechanism, not the name. Note it does NOT wrongly match 486 (0.50), so the threshold is doing work."},
+    {"extracted": "sore throat", "expects": null, "note": "negative: nothing in the coded set"},
+    {"extracted": "hypotension", "expects": null, "note": "negative: one character from 'hypertension'. This is why no edit-distance rule exists."},
+    {"extracted": "chest pain", "expects": null, "note": "negative: a symptom, not one of these diagnoses"},
+    {"extracted": "type ii respiratory failure", "expects": null, "note": "negative: shares 'type' and 'ii' with the diabetes title at 0.50, below threshold"}
+  ]
+}

@@ -1,0 +1,117 @@
+"""Matching extracted clinical entities against coded ground truth (GRND-4).
+
+The rules are data (:mod:`meddial.grounding.spec`), the execution is mechanical
+(:mod:`meddial.grounding.matcher`), and the instrument's own error rate is
+measured on a hand-built fixture (:mod:`meddial.grounding.evaluate`) and
+reported alongside every result that depends on it.
+"""
+
+from meddial.grounding.agreement import (
+    AgreementError,
+    ExtractionAgreement,
+    FamilyExtraction,
+    FieldAgreement,
+    measure_extraction_agreement,
+)
+from meddial.grounding.evaluate import (
+    DEFAULT_FIXTURE_DIR,
+    Disagreement,
+    FixtureCase,
+    MatcherErrorRate,
+    MatcherFixture,
+    evaluate_matcher,
+    format_report,
+)
+from meddial.grounding.matcher import (
+    NO_MATCH,
+    CodedEntity,
+    Matcher,
+    MatchResult,
+    Normalised,
+    dice,
+    icd9_category,
+    matcher_for,
+)
+from meddial.grounding.normalise import normalise
+from meddial.grounding.spec import (
+    DEFAULT_MATCHER_DIR,
+    GRANULARITY_RANK,
+    HASH_LOCK_FILENAME,
+    MATCHER_DIR_ENV,
+    NORMALISATION_RULES,
+    EntityKind,
+    Granularity,
+    MatcherError,
+    MatcherNotFrozenError,
+    MatcherRegistry,
+    MatcherSpec,
+    MatcherValidationError,
+    UnknownMatcherError,
+    ensure_frozen_before,
+)
+from meddial.grounding.structured_match import (
+    CaseGroundingResult,
+    CodedCase,
+    EntityPair,
+    ExtractedCase,
+    ExtractedEntity,
+    FieldCaseResult,
+    FieldGroundingSummary,
+    GroundingError,
+    GroundingReport,
+    evaluate_structured_matches,
+    match_case,
+    match_field,
+    structured_match,
+)
+
+__all__ = [
+    "DEFAULT_FIXTURE_DIR",
+    "DEFAULT_MATCHER_DIR",
+    "GRANULARITY_RANK",
+    "HASH_LOCK_FILENAME",
+    "MATCHER_DIR_ENV",
+    "NORMALISATION_RULES",
+    "NO_MATCH",
+    "AgreementError",
+    "CaseGroundingResult",
+    "CodedCase",
+    "CodedEntity",
+    "Disagreement",
+    "EntityKind",
+    "EntityPair",
+    "ExtractedCase",
+    "ExtractedEntity",
+    "ExtractionAgreement",
+    "FamilyExtraction",
+    "FieldAgreement",
+    "FieldCaseResult",
+    "FieldGroundingSummary",
+    "FixtureCase",
+    "Granularity",
+    "GroundingError",
+    "GroundingReport",
+    "MatchResult",
+    "Matcher",
+    "MatcherError",
+    "MatcherErrorRate",
+    "MatcherFixture",
+    "MatcherNotFrozenError",
+    "MatcherRegistry",
+    "MatcherSpec",
+    "MatcherValidationError",
+    "Normalised",
+    "UnknownMatcherError",
+    "dice",
+    "ensure_frozen_before",
+    "evaluate_matcher",
+    "evaluate_structured_matches",
+    "format_report",
+    "icd9_category",
+    "match_case",
+    "match_field",
+    "matcher_for",
+    "measure_extraction_agreement",
+    "normalise",
+    "structured_match",
+]

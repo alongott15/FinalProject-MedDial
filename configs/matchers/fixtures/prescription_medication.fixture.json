@@ -1,0 +1,42 @@
+{
+  "fixture_id": "prescription_medication.v1",
+  "matcher": "prescription_medication@1.0",
+  "provenance": "Hand-built. The coded rows are drug names in the form PRESCRIPTIONS.DRUG records them - generic name, often with a salt form. No MIMIC-III record contributed to this file; every string is a public generic or brand drug name. The extracted strings are how a drug is named in conversation: brand names, doses, and routes. Cases marked 'known-hard' are expected to fail.",
+  "coded": [
+    {"description": "Furosemide"},
+    {"description": "Metoprolol Tartrate"},
+    {"description": "Warfarin"},
+    {"description": "Acetaminophen"},
+    {"description": "Pantoprazole Sodium"},
+    {"description": "Levofloxacin"},
+    {"description": "Insulin"},
+    {"description": "Aspirin"},
+    {"description": "Lisinopril"},
+    {"description": "Atorvastatin Calcium"},
+    {"description": "Heparin Sodium"},
+    {"description": "Potassium Chloride"}
+  ],
+  "cases": [
+    {"extracted": "Lasix 40mg", "expects": "Furosemide", "note": "brand plus dose with no space before the unit"},
+    {"extracted": "furosemide", "expects": "Furosemide", "note": "exact description"},
+    {"extracted": "Lopressor", "expects": "Metoprolol Tartrate", "note": "brand to generic, then the coded salt form is stripped"},
+    {"extracted": "metoprolol 25 mg PO", "expects": "Metoprolol Tartrate", "note": "dose and route stripped"},
+    {"extracted": "metoprolol succinate", "expects": "Metoprolol Tartrate", "note": "the spec deliberately collapses salt forms, so a different formulation of the same molecule matches. Stated in the rationale; formulation-level claims need a new matcher version."},
+    {"extracted": "Coumadin 5 mg tablet", "expects": "Warfarin", "note": "brand, dose and dose form"},
+    {"extracted": "warfarin sodium", "expects": "Warfarin", "note": "salt on the extracted side, not the coded side"},
+    {"extracted": "Tylenol", "expects": "Acetaminophen", "note": "brand to generic"},
+    {"extracted": "Protonix 40 mg IV", "expects": "Pantoprazole Sodium", "note": "brand, dose and route; salt only on the coded side"},
+    {"extracted": "Levaquin", "expects": "Levofloxacin", "note": "brand to generic"},
+    {"extracted": "aspirin 81mg", "expects": "Aspirin", "note": "dose stripped"},
+    {"extracted": "ASA", "expects": "Aspirin", "note": "abbreviation carried in the brand table, which is where non-generic surface forms live for drugs"},
+    {"extracted": "atorvastatin 20 mg", "expects": "Atorvastatin Calcium", "note": "coded salt stripped"},
+    {"extracted": "heparin", "expects": "Heparin Sodium", "note": "coded salt stripped"},
+    {"extracted": "potassium chloride 20 mEq", "expects": "Potassium Chloride", "note": "chloride is excluded from salt_forms on purpose; stripping it would leave 'potassium'"},
+    {"extracted": "insulin glargine", "expects": "Insulin", "note": "known-hard. The coded row is the bare class. No overlap granularity is enabled here, so this is a miss - by design, because the same rule that matched it would also match insulin lispro to insulin glargine."},
+    {"extracted": "Lantus", "expects": "Insulin", "note": "known-hard. The brand table resolves it to 'insulin glargine', which is more specific than the coded row, so it misses for the same reason."},
+    {"extracted": "ibuprofen", "expects": null, "note": "negative: not prescribed in this record"},
+    {"extracted": "Zocor", "expects": null, "note": "negative: the brand table resolves it to simvastatin, which correctly matches nothing here. Tests that a successful substitution does not imply a match."},
+    {"extracted": "Norvasc 5 mg", "expects": null, "note": "negative: amlodipine is absent from the coded set"},
+    {"extracted": "vitamin D", "expects": null, "note": "negative: a supplement, no coded row"}
+  ]
+}
