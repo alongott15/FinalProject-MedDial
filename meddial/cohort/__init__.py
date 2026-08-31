@@ -36,6 +36,7 @@ from meddial.cohort.select import (
     CohortSelectionError,
     DuplicateAdmissionError,
     InsufficientEligibleCasesError,
+    MalformedCandidate,
     StageCount,
     select_cohort,
 )
@@ -63,6 +64,7 @@ __all__ = [
     "CriterionCode",
     "DuplicateAdmissionError",
     "InsufficientEligibleCasesError",
+    "MalformedCandidate",
     "ManifestValidationError",
     "StageCount",
     "calculate_charlson",

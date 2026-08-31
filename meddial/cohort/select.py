@@ -9,12 +9,14 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 from meddial.cohort.criteria import (
     CRITERION_LABELS,
     CRITERION_ORDER,
     DEFAULT_CRITERIA,
     AdmissionRecord,
+    CandidateValidationError,
     CohortCriteria,
     CriteriaEvaluation,
     CriterionCode,
@@ -103,6 +105,31 @@ class CaseAuditRecord:
 
 
 @dataclass(frozen=True)
+class MalformedCandidate:
+    """A candidate the criteria could not be applied to, and why.
+
+    MIMIC-III contains 98 admissions whose DISCHTIME precedes their ADMITTIME
+    by less than a day -- back-entered timestamps, not a parsing artefact.
+    Such a record has no evaluable length of stay, so E7 is undefined for it.
+
+    Raising would abandon a 59,000-record build over 0.17% of it; dropping it
+    quietly would leave a hole in the very counts M3 asks to be reported. It is
+    therefore excluded, named, and counted.
+    """
+
+    subject_id: int
+    hadm_id: int
+    reason: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "subject_id": self.subject_id,
+            "hadm_id": self.hadm_id,
+            "reason": self.reason,
+        }
+
+
+@dataclass(frozen=True)
 class CohortSelection:
     """All deterministic outputs needed to create a run manifest."""
 
@@ -116,6 +143,7 @@ class CohortSelection:
     audit: tuple[CaseAuditRecord, ...]
     stage_counts: tuple[StageCount, ...]
     cohort_hash: str
+    malformed: tuple[MalformedCandidate, ...] = ()
 
     @property
     def n_cases(self) -> int:
@@ -144,7 +172,23 @@ def select_cohort(
 
     candidates = tuple(records)
     _reject_duplicate_admissions(candidates)
-    evaluations = [evaluate_admission(record, criteria) for record in candidates]
+
+    # A record the criteria cannot judge is excluded and reported, not raised
+    # on: one unevaluable admission must not abandon the whole build, and must
+    # not vanish from the counts either.
+    evaluations = []
+    malformed: list[MalformedCandidate] = []
+    for record in candidates:
+        try:
+            evaluations.append(evaluate_admission(record, criteria))
+        except CandidateValidationError as exc:
+            malformed.append(
+                MalformedCandidate(
+                    subject_id=record.subject_id,
+                    hadm_id=record.hadm_id,
+                    reason=str(exc),
+                )
+            )
     evaluations = _apply_one_admission_per_subject(evaluations)
     stage_counts = _build_stage_counts(evaluations)
 
@@ -211,6 +255,7 @@ def select_cohort(
         candidate_pool_size=len(candidates),
         eligible_pool_size=len(eligible),
         selected=selected,
+        malformed=tuple(malformed),
         audit=tuple(audit),
         stage_counts=stage_counts,
         cohort_hash=cohort_hash,

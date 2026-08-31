@@ -225,6 +225,15 @@ def cohort_main(argv: list[str] | None = None) -> int:
     for stage in manifest.get("exclusion_flow", []):
         label = stage.get("label", stage.get("criterion", "?"))
         print(f"  {stage.get('criterion', ''):>4}  {label}: -{stage.get('excluded', 0)}")
+    if selection.malformed:
+        print()
+        print(f"Unevaluable candidates (excluded, reported): {len(selection.malformed)}")
+        reasons: dict[str, int] = {}
+        for row in selection.malformed:
+            reasons[row.reason] = reasons.get(row.reason, 0) + 1
+        for reason, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
+            print(f"  {count:>6}  {reason}")
+
     print()
     print(f"Eligible pool: {selection.eligible_pool_size}")
     print(f"Selected:      {len(selection.selected)}")

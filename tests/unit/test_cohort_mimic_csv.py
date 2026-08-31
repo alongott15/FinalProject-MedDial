@@ -237,3 +237,61 @@ def test_the_text_selecting_entry_point_refuses_and_names_its_replacement() -> N
 
     with pytest.raises(SystemExit, match="meddial-cohort"):
         gtmf_creation.main()
+
+
+# -- unevaluable records ----------------------------------------------------
+
+
+def test_an_admission_discharged_before_it_began_is_reported_not_raised(
+    tmp_path: Path,
+) -> None:
+    """MIMIC-III holds 98 such rows; one must not abandon a 59k-record build.
+
+    Their discharge precedes their admission by under a day -- back-entered
+    timestamps, not a parsing artefact. Length of stay is undefined for them,
+    so E7 cannot be evaluated and they are excluded; but they never reach a
+    criterion, so they appear in no E-stage and would vanish from the counts
+    M3 asks to be reported if they were merely dropped.
+    """
+    from meddial.cohort import select_cohort
+    from meddial.cohort.mimic_csv import MimicCsvSource
+
+    extract = _write_extract(tmp_path / "mimic")
+    # Subject 1 is the only eligible case; invert subject 4's stay instead.
+    text = (extract / "ADMISSIONS.csv").read_text(encoding="utf-8")
+    text = text.replace(
+        "4,400,2150-07-01 10:00:00,2150-07-30 12:00:00",
+        "4,400,2150-07-01 10:00:00,2150-07-01 02:00:00",
+    )
+    (extract / "ADMISSIONS.csv").write_text(text, encoding="utf-8")
+
+    source = MimicCsvSource(extract)
+    selection = select_cohort(
+        list(source.admission_records()),
+        source_snapshot_hash=source.snapshot_hash(),
+        n_cases=1,
+    )
+
+    assert [(m.subject_id, m.hadm_id) for m in selection.malformed] == [(4, 400)]
+    assert "dischtime precedes admittime" in selection.malformed[0].reason
+    assert len(selection.selected) == 1, "the build still completes"
+
+
+def test_the_manifest_reports_unevaluable_candidates(tmp_path: Path) -> None:
+    """A silent drop would leave a hole in the reported flow."""
+    from meddial.cli import cohort_main
+
+    extract = _write_extract(tmp_path / "mimic")
+    text = (extract / "ADMISSIONS.csv").read_text(encoding="utf-8")
+    text = text.replace(
+        "4,400,2150-07-01 10:00:00,2150-07-30 12:00:00",
+        "4,400,2150-07-01 10:00:00,2150-07-01 02:00:00",
+    )
+    (extract / "ADMISSIONS.csv").write_text(text, encoding="utf-8")
+    out = tmp_path / "cohort"
+
+    cohort_main(["--csv-dir", str(extract), "--out", str(out), "--n", "1"])
+
+    manifest = json.loads((out / "cohort_private_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["malformed_candidate_count"] == 1
+    assert manifest["malformed_candidates"][0]["hadm_id"] == 400

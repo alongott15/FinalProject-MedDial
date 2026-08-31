@@ -46,6 +46,10 @@ def create_private_manifest(
         "sampling_seed": selection.seed,
         "requested_n": selection.requested_n,
         "candidate_pool_size": selection.candidate_pool_size,
+        # Reported, not dropped: these never reached the criteria, so they
+        # appear in no E-stage and would otherwise be missing from the flow.
+        "malformed_candidate_count": len(selection.malformed),
+        "malformed_candidates": [row.to_dict() for row in selection.malformed],
         "eligible_pool_size": selection.eligible_pool_size,
         "n_cases": selection.n_cases,
         "cohort_hash": selection.cohort_hash,
