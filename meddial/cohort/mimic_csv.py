@@ -29,6 +29,7 @@ vocabulary.
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
@@ -63,7 +64,7 @@ _COLUMNS: dict[str, tuple[str, ...]] = {
     ),
     "PATIENTS.csv": ("SUBJECT_ID", "DOB", "GENDER"),
     "NOTEEVENTS.csv": ("ROW_ID", "SUBJECT_ID", "HADM_ID", "CHARTDATE", "CATEGORY", "TEXT"),
-    "ICUSTAYS.csv": ("HADM_ID",),
+    "ICUSTAYS.csv": ("HADM_ID", "LOS"),
     "PROCEDURES_ICD.csv": ("HADM_ID", "ICD9_CODE"),
     "DIAGNOSES_ICD.csv": ("HADM_ID", "ICD9_CODE"),
 }
@@ -132,10 +133,22 @@ class MimicCsvSource:
             **kwargs,
         )
 
-    def _icu_hadm_ids(self) -> set[int]:
-        """``icu_flags``: any ICU stay at all marks the admission (E1)."""
-        icu = self._read("ICUSTAYS.csv")
-        return {int(value) for value in icu["HADM_ID"].dropna().unique()}
+    def _icu_days(self) -> dict[int, float]:
+        """``icu_flags``, but graded: total ICU days per admission (E1).
+
+        An admission can have several ICU stays; their sum is the duration the
+        criterion bounds. A stay whose LOS the source left null (10 rows in
+        v1.4) becomes ``inf``: an unknown duration cannot be shown to be under
+        the threshold, so it fails E1 rather than slipping under it.
+        """
+        icu = self._read("ICUSTAYS.csv").dropna(subset=["HADM_ID"])
+        totals: dict[int, float] = {}
+        for hadm_id, los in zip(icu["HADM_ID"], icu["LOS"], strict=False):
+            key = int(hadm_id)
+            days = math.inf if pd.isna(los) else float(los)
+            previous = totals.get(key, 0.0)
+            totals[key] = math.inf if math.isinf(days) or math.isinf(previous) else previous + days
+        return totals
 
     def _codes_by_hadm(self, name: str) -> dict[int, tuple[str, ...]]:
         """``procedure_codes`` / ``diagnosis_codes``: distinct normalised codes."""
@@ -190,7 +203,7 @@ class MimicCsvSource:
         exclusion counts are themselves a reported result. Filtering here would
         destroy the flow diagram before it could be produced.
         """
-        icu_hadm_ids = self._icu_hadm_ids()
+        icu_days = self._icu_days()
         procedures = self._codes_by_hadm("PROCEDURES_ICD.csv")
         diagnoses = self._codes_by_hadm("DIAGNOSES_ICD.csv")
         notes = self._discharge_notes()
@@ -225,7 +238,7 @@ class MimicCsvSource:
                 dischtime=_to_datetime(row.DISCHTIME),
                 age_years=float(_full_years(dob, row.ADMITTIME)),
                 admission_type=_text(row.ADMISSION_TYPE),
-                has_icu_stay=hadm_id in icu_hadm_ids,
+                has_icu_stay=hadm_id in icu_days,
                 hospital_expire_flag=bool(int(row.HOSPITAL_EXPIRE_FLAG or 0)),
                 procedure_icd9_codes=procedures.get(hadm_id, ()),
                 diagnosis_icd9_codes=diagnoses.get(hadm_id, ()),
@@ -233,6 +246,7 @@ class MimicCsvSource:
                 note_category=note.category if note else "",
                 deathtime=None if pd.isna(row.DEATHTIME) else _to_datetime(row.DEATHTIME),
                 row_id=note.row_id if note else None,
+                icu_days=icu_days.get(hadm_id, 0.0),
             )
 
 

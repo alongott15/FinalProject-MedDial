@@ -32,6 +32,7 @@ def _candidate(
     los_days: float = 2,
     admission_type: str = "ELECTIVE",
     icu: bool = False,
+    icu_days: float | None = None,
     died: bool = False,
     procedures: tuple[str, ...] = (),
     diagnoses: tuple[str, ...] = (),
@@ -46,6 +47,8 @@ def _candidate(
         age_years=age,
         admission_type=admission_type,
         has_icu_stay=icu,
+        # Default a flagged ICU stay to one that actually trips E1.
+        icu_days=(icu_days if icu_days is not None else (1.0 if icu else 0.0)),
         hospital_expire_flag=died,
         procedure_icd9_codes=procedures,
         diagnosis_icd9_codes=diagnoses,
@@ -134,6 +137,52 @@ def test_a_newborn_admission_is_excluded_by_type_not_only_by_age() -> None:
     newborn = _candidate(10, 1001, age=30, admission_type="NEWBORN")
 
     assert CriterionCode.PAEDIATRIC_OR_NEWBORN in evaluate_admission(newborn).fired
+
+
+@pytest.mark.parametrize(
+    ("icu_days", "excluded"),
+    [(0.0, False), (0.5, False), (0.99, False), (1.0, True), (1.69, True), (21.5, True)],
+)
+def test_e1_bounds_icu_duration_rather_than_its_existence(
+    icu_days: float, excluded: bool
+) -> None:
+    """Criteria 1.2 excludes an ICU stay of a day or more, not any ICU stay.
+
+    An ICU bed overnight and critical illness are different claims: a fifth of
+    MIMIC ICU stays are under a day, many protocol-driven post-operative
+    observation. The clinical acuity filter is E6 and E8; E1 bounds how long
+    intensive care was needed.
+    """
+    candidate = _candidate(7, 701, icu=True, icu_days=icu_days)
+
+    fired = evaluate_admission(candidate).fired
+    assert (CriterionCode.ICU_STAY in fired) is excluded
+
+
+def test_an_icu_stay_of_unknown_duration_fails_e1() -> None:
+    """Unknown cannot be shown to be brief, so it does not pass as brief."""
+    candidate = _candidate(8, 801, icu=True, icu_days=float("inf"))
+
+    assert CriterionCode.ICU_STAY in evaluate_admission(candidate).fired
+
+
+def test_an_admission_with_no_icu_stay_never_fires_e1() -> None:
+    """The threshold must not turn a zero-day non-stay into an exclusion."""
+    candidate = _candidate(8, 802, icu=False)
+
+    assert CriterionCode.ICU_STAY not in evaluate_admission(candidate).fired
+
+
+def test_appendix_a_case_stays_excluded_under_the_graded_e1() -> None:
+    """Relaxing E1 must not readmit the case the PRD holds up as wrong.
+
+    Subject 10446's three admissions carry ICU stays of 1.69, 2.88 and 21.48
+    days in MIMIC-III v1.4, so every one of them still trips E1 on duration
+    alone -- before E2, E6 or E8 are consulted.
+    """
+    for icu_days in (1.69, 2.88, 21.48):
+        case = _candidate(10446, 196578, icu=True, icu_days=icu_days)
+        assert CriterionCode.ICU_STAY in evaluate_admission(case).fired
 
 
 def test_one_admission_per_subject() -> None:

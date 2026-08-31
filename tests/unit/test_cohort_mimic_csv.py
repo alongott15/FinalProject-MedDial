@@ -53,7 +53,7 @@ def _write_extract(root: Path, *, note_category_200: str = "Nursing") -> Path:
         f'15,4,400,2150-07-30,Discharge summary,"long stay {LONG_NOTE}"\n',
         encoding="utf-8",
     )
-    (root / "ICUSTAYS.csv").write_text("HADM_ID\n300\n", encoding="utf-8")
+    (root / "ICUSTAYS.csv").write_text("HADM_ID,LOS\n300,2.5\n", encoding="utf-8")
     (root / "PROCEDURES_ICD.csv").write_text(
         "HADM_ID,ICD9_CODE\n100,38.93\n", encoding="utf-8"
     )
@@ -135,7 +135,7 @@ def test_the_snapshot_hash_changes_when_the_extract_changes(tmp_path: Path) -> N
     """A cohort is only reproducible if its source is identified."""
     extract = _write_extract(tmp_path / "mimic")
     before = MimicCsvSource(extract).snapshot_hash()
-    (extract / "ICUSTAYS.csv").write_text("HADM_ID\n300\n400\n", encoding="utf-8")
+    (extract / "ICUSTAYS.csv").write_text("HADM_ID,LOS\n300,2.5\n400,2.5\n", encoding="utf-8")
 
     assert MimicCsvSource(extract).snapshot_hash() != before
 
@@ -199,7 +199,7 @@ def test_scr_refuses_an_extract_the_cohort_did_not_come_from(tmp_path: Path) -> 
     out = tmp_path / "cohort"
     cohort_main(["--csv-dir", str(extract), "--out", str(out), "--n", "1"])
 
-    (extract / "ICUSTAYS.csv").write_text("HADM_ID\n300\n400\n", encoding="utf-8")
+    (extract / "ICUSTAYS.csv").write_text("HADM_ID,LOS\n300,2.5\n400,2.5\n", encoding="utf-8")
 
     with pytest.raises(SystemExit, match="does not match"):
         scr_main(

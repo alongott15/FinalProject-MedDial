@@ -46,7 +46,7 @@ class CriterionCode(str, Enum):
 CRITERION_ORDER: tuple[CriterionCode, ...] = tuple(CriterionCode)
 
 CRITERION_LABELS: Mapping[CriterionCode, str] = {
-    CriterionCode.ICU_STAY: "any ICU stay for the admission",
+    CriterionCode.ICU_STAY: "ICU stay at or above the maximum",
     CriterionCode.IN_HOSPITAL_DEATH: "in-hospital death",
     CriterionCode.MECHANICAL_VENTILATION: "mechanical ventilation or intubation",
     CriterionCode.PAEDIATRIC_OR_NEWBORN: "newborn or age below the minimum",
@@ -67,7 +67,8 @@ class CohortCriteria:
     """The complete versioned criteria set used for one selection run."""
 
     criteria_id: str = "mimiciii_structured_lower_acuity"
-    version: str = "1.1"
+    version: str = "1.2"
+    maximum_icu_days_exclusive: float = 1.0
     minimum_age_years: float = 12.0
     maximum_age_years_exclusive: float = 90.0
     maximum_length_of_stay_days: float = 7.0
@@ -79,6 +80,8 @@ class CohortCriteria:
     def validate(self) -> None:
         if not self.criteria_id or not self.version:
             raise ValueError("criteria_id and version must be non-empty")
+        if self.maximum_icu_days_exclusive < 0:
+            raise ValueError("maximum_icu_days_exclusive must be non-negative")
         if self.minimum_age_years < 0:
             raise ValueError("minimum_age_years must be non-negative")
         if self.maximum_age_years_exclusive <= self.minimum_age_years:
@@ -131,6 +134,10 @@ class AdmissionRecord:
     note_category: str
     deathtime: datetime | None = None
     row_id: int | None = None
+    # Total days across every ICU stay of the admission. ``inf`` means an ICU
+    # stay whose duration the source did not record: unknown cannot be shown
+    # to be brief, so it fails E1 rather than passing it.
+    icu_days: float = 0.0
 
     @classmethod
     def from_mapping(cls, row: Mapping[str, Any]) -> AdmissionRecord:
@@ -223,7 +230,12 @@ def evaluate_admission(
     _validate_record(record)
     fired: list[CriterionCode] = []
 
-    if record.has_icu_stay:
+    # E1 is graded, not binary. An ICU bed overnight and critical illness are
+    # different claims: in MIMIC a fifth of ICU stays are under a day, many of
+    # them protocol-driven post-operative observation. The clinical acuity
+    # filter is E6 (life-threatening diagnoses) and E8 (comorbidity burden);
+    # E1 bounds how long the admission needed intensive care at all.
+    if record.has_icu_stay and record.icu_days >= criteria.maximum_icu_days_exclusive:
         fired.append(CriterionCode.ICU_STAY)
     if record.hospital_expire_flag or record.deathtime is not None:
         fired.append(CriterionCode.IN_HOSPITAL_DEATH)

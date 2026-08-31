@@ -1,5 +1,5 @@
 -- MedDial structured cohort candidate query
--- criteria: mimiciii_structured_lower_acuity@1.1
+-- criteria: mimiciii_structured_lower_acuity@1.2
 --
 -- This query deliberately returns excluded as well as eligible admissions.
 -- meddial.cohort.criteria applies E1-E9 and records every criterion that fired;
@@ -22,7 +22,15 @@ WITH discharge_notes AS (
     WHERE LOWER(n.category) = 'discharge summary'                 -- E9
 ),
 icu_flags AS (
-    SELECT i.hadm_id, TRUE AS has_icu_stay
+    -- E1 bounds ICU *duration*, not its existence: an admission may have
+    -- several stays, and their total is what the criterion compares against
+    -- maximum_icu_days_exclusive. A NULL los is treated as exceeding any
+    -- threshold, since an unrecorded duration cannot be shown to be brief.
+    SELECT
+        i.hadm_id,
+        TRUE AS has_icu_stay,
+        CASE WHEN BOOL_OR(i.los IS NULL) THEN 'Infinity'::FLOAT
+             ELSE SUM(i.los) END AS icu_days
     FROM icustays AS i                                             -- E1
     GROUP BY i.hadm_id
 ),
@@ -54,6 +62,7 @@ SELECT
     -- criteria body, not here, so this query is version-agnostic.
     a.admission_type,                                              -- E4
     COALESCE(i.has_icu_stay, FALSE) AS has_icu_stay,               -- E1
+    COALESCE(i.icu_days, 0) AS icu_days,                           -- E1
     COALESCE(a.hospital_expire_flag, 0) AS hospital_expire_flag,   -- E2
     a.deathtime,                                                   -- E2
     COALESCE(pc.procedure_icd9_codes, ARRAY[]::TEXT[])
