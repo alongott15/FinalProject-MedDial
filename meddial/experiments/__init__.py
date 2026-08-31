@@ -8,6 +8,16 @@ aggregation pass that never touches a provider.
 """
 
 from .aggregate import aggregate_attempts, aggregate_run, read_attempts
+from .backend import (
+    FULL_DISCLOSURE_POLICY_ID,
+    BackendCase,
+    BackendError,
+    CaseInputError,
+    DialogueFormatError,
+    MedDialBackend,
+    PolicyStageError,
+    RecordingProvider,
+)
 from .config import (
     CONFIG_SCHEMA_VERSION,
     EXP8ControlConfigs,
@@ -77,14 +87,19 @@ from .variants import (
 __all__ = [
     "ATTEMPT_RECORD_VERSION",
     "CONFIG_SCHEMA_VERSION",
+    "FULL_DISCLOSURE_POLICY_ID",
     "POLICY_ORDER",
     "REFERENCE_MODES",
     "RUN_MANIFEST_VERSION",
     "AttemptLog",
     "AttemptRecord",
     "AttemptRecordError",
+    "BackendCase",
+    "BackendError",
     "BasicMultiAgentVariant",
+    "CaseInputError",
     "CorpusError",
+    "DialogueFormatError",
     "DialogueRecord",
     "DirectLLMVariant",
     "E0Report",
@@ -95,7 +110,10 @@ __all__ = [
     "FullMedDialVariant",
     "ImmutableAttemptError",
     "KnowledgeControlledVariant",
+    "MedDialBackend",
     "ModelSpec",
+    "PolicyStageError",
+    "RecordingProvider",
     "RepairAction",
     "RepairPlan",
     "ResumeHashMismatch",
