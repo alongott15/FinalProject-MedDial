@@ -78,7 +78,13 @@ MEDDIAL_GENERATOR_BASE_URL=http://localhost:11434/v1
 MEDDIAL_GENERATOR_MODEL=llama3.1:8b
 MEDDIAL_JUDGE_BASE_URL=http://localhost:11434/v1
 MEDDIAL_JUDGE_MODEL=qwen3.5:9b
+MEDDIAL_GTMF_BASE_URL=http://localhost:11434/v1
+MEDDIAL_GTMF_MODEL=qwen3.5:9b
 ```
+
+`MEDDIAL_GTMF_*` drives `gtmf_creation.py`, which reads MIMIC-III discharge
+summaries. Each prefix also accepts `_FAMILY` and `_QUANT` to record what a
+digest alone does not say.
 
 The weight digest is resolved from the running server at startup, so a run
 cannot begin against weights it cannot identify.
