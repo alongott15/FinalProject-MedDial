@@ -96,7 +96,7 @@ def test_appendix_a_case_is_excluded() -> None:
     ("candidate", "criterion"),
     [
         (_candidate(1, 101, procedures=("96.70",)), CriterionCode.MECHANICAL_VENTILATION),
-        (_candidate(2, 201, age=17), CriterionCode.PAEDIATRIC_OR_NEWBORN),
+        (_candidate(2, 201, age=11), CriterionCode.PAEDIATRIC_OR_NEWBORN),
         (_candidate(3, 301, age=90), CriterionCode.AGE_90_OR_OVER),
         (_candidate(4, 401, note_text="too short"), CriterionCode.INSUFFICIENT_NOTE),
     ],
@@ -106,6 +106,34 @@ def test_remaining_structured_exclusions_fire(
     criterion: CriterionCode,
 ) -> None:
     assert criterion in evaluate_admission(candidate).fired
+
+
+@pytest.mark.parametrize(
+    ("age", "excluded"),
+    [(11, True), (12, False), (17, False), (89, False), (90, True)],
+)
+def test_the_age_band_is_twelve_inclusive_to_ninety_exclusive(
+    age: int, excluded: bool
+) -> None:
+    """Criteria 1.1 admits [12, 90). E4 holds the floor, E5 the ceiling.
+
+    Pinned at the boundaries because both are off-by-one prone and the floor
+    has already moved once: a threshold that drifts silently invalidates every
+    cohort selected under the old one.
+    """
+    fired = evaluate_admission(_candidate(9, 901, age=age)).fired
+    age_criteria = {
+        CriterionCode.PAEDIATRIC_OR_NEWBORN,
+        CriterionCode.AGE_90_OR_OVER,
+    }
+    assert bool(age_criteria & set(fired)) is excluded
+
+
+def test_a_newborn_admission_is_excluded_by_type_not_only_by_age() -> None:
+    """MIMIC neonates carry shifted dates, so the type is checked as well."""
+    newborn = _candidate(10, 1001, age=30, admission_type="NEWBORN")
+
+    assert CriterionCode.PAEDIATRIC_OR_NEWBORN in evaluate_admission(newborn).fired
 
 
 def test_one_admission_per_subject() -> None:

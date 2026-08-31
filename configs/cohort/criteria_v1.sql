@@ -1,5 +1,5 @@
 -- MedDial structured cohort candidate query
--- criteria: mimiciii_structured_lower_acuity@1.0
+-- criteria: mimiciii_structured_lower_acuity@1.1
 --
 -- This query deliberately returns excluded as well as eligible admissions.
 -- meddial.cohort.criteria applies E1-E9 and records every criterion that fired;
@@ -49,6 +49,9 @@ SELECT
     a.admittime,
     a.dischtime,
     DATE_PART('year', AGE(a.admittime, p.dob)) AS age_years,       -- E4, E5
+    -- The band is [minimum_age_years, maximum_age_years_exclusive),
+    -- 12 and 90 at criteria 1.1. The thresholds live in the Python
+    -- criteria body, not here, so this query is version-agnostic.
     a.admission_type,                                              -- E4
     COALESCE(i.has_icu_stay, FALSE) AS has_icu_stay,               -- E1
     COALESCE(a.hospital_expire_flag, 0) AS hospital_expire_flag,   -- E2

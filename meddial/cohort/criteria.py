@@ -49,8 +49,8 @@ CRITERION_LABELS: Mapping[CriterionCode, str] = {
     CriterionCode.ICU_STAY: "any ICU stay for the admission",
     CriterionCode.IN_HOSPITAL_DEATH: "in-hospital death",
     CriterionCode.MECHANICAL_VENTILATION: "mechanical ventilation or intubation",
-    CriterionCode.PAEDIATRIC_OR_NEWBORN: "newborn or age under 18",
-    CriterionCode.AGE_90_OR_OVER: "age 90 or over",
+    CriterionCode.PAEDIATRIC_OR_NEWBORN: "newborn or age below the minimum",
+    CriterionCode.AGE_90_OR_OVER: "age at or above the maximum",
     CriterionCode.HIGH_ACUITY_DIAGNOSIS: "high-acuity ICD-9 diagnosis",
     CriterionCode.LENGTH_OF_STAY: "length of stay above threshold",
     CriterionCode.CHARLSON_COMORBIDITY: "Charlson index above threshold",
@@ -67,8 +67,8 @@ class CohortCriteria:
     """The complete versioned criteria set used for one selection run."""
 
     criteria_id: str = "mimiciii_structured_lower_acuity"
-    version: str = "1.0"
-    minimum_age_years: float = 18.0
+    version: str = "1.1"
+    minimum_age_years: float = 12.0
     maximum_age_years_exclusive: float = 90.0
     maximum_length_of_stay_days: float = 7.0
     maximum_charlson_score: int = 2
