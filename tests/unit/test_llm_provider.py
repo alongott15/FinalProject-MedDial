@@ -20,6 +20,8 @@ from meddial.llm import (
     ProviderRateLimitError,
     ProviderResponseError,
     ProviderTimeoutError,
+    local_openai,
+    resolve_ollama_digest,
 )
 from meddial.llm.provider import ChatMessage
 
@@ -229,3 +231,66 @@ def test_network_kill_switch_does_not_block_the_mock(monkeypatch) -> None:
         MESSAGES, classification=RESTRICTED, temperature=0.7, max_tokens=64
     )
     assert result.text == "hello"
+
+
+# --------------------------------------------------------------------------
+# EXP-7: resolving the weight digest from a running Ollama server
+# --------------------------------------------------------------------------
+
+DIGEST = "6488c96fa5faab64bb65cbd30d4289e20e6130ef535a93ef9a49f42eda893ea7"
+
+
+def _stub_ollama(monkeypatch, *, show: dict, tags: dict | None = None) -> list[str]:
+    """Stand in for a running server, recording which endpoints were consulted."""
+    seen: list[str] = []
+
+    def _post(url: str, **_kwargs) -> httpx.Response:
+        seen.append(url)
+        return httpx.Response(200, json=show, request=httpx.Request("POST", url))
+
+    def _get(url: str, **_kwargs) -> httpx.Response:
+        seen.append(url)
+        return httpx.Response(200, json=tags or {}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(local_openai.httpx, "post", _post)
+    monkeypatch.setattr(local_openai.httpx, "get", _get)
+    return seen
+
+
+def test_digest_comes_from_show_when_the_server_reports_one(monkeypatch) -> None:
+    seen = _stub_ollama(monkeypatch, show={"digest": DIGEST})
+
+    assert resolve_ollama_digest("http://localhost:11434/v1", "qwen3.5:9b") == DIGEST
+    assert seen == ["http://localhost:11434/api/show"]
+
+
+def test_digest_falls_back_to_tags_when_show_omits_it(monkeypatch) -> None:
+    """Ollama 0.17 dropped the digest from /api/show; the run must not stop."""
+    seen = _stub_ollama(
+        monkeypatch,
+        show={"details": {"family": "qwen35"}},
+        tags={"models": [{"name": "qwen3.5:9b", "digest": DIGEST}]},
+    )
+
+    assert resolve_ollama_digest("http://localhost:11434/v1", "qwen3.5:9b") == DIGEST
+    assert seen[-1] == "http://localhost:11434/api/tags"
+
+
+def test_the_fallback_matches_the_tag_exactly(monkeypatch) -> None:
+    """qwen3.5:9b and qwen3.5:4b are different weights."""
+    _stub_ollama(
+        monkeypatch,
+        show={"details": {}},
+        tags={"models": [{"name": "qwen3.5:4b", "digest": "other"}]},
+    )
+
+    with pytest.raises(ProviderConfigurationError, match="no digest"):
+        resolve_ollama_digest("http://localhost:11434/v1", "qwen3.5:9b")
+
+
+def test_a_run_cannot_start_against_unidentifiable_weights(monkeypatch) -> None:
+    """EXP-7: a number whose weights cannot be named is not reproducible."""
+    _stub_ollama(monkeypatch, show={"details": {}}, tags={"models": []})
+
+    with pytest.raises(ProviderConfigurationError, match="cannot record provenance"):
+        resolve_ollama_digest("http://localhost:11434/v1", "qwen3.5:9b")

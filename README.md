@@ -77,7 +77,7 @@ evidence:
 MEDDIAL_GENERATOR_BASE_URL=http://localhost:11434/v1
 MEDDIAL_GENERATOR_MODEL=llama3.1:8b
 MEDDIAL_JUDGE_BASE_URL=http://localhost:11434/v1
-MEDDIAL_JUDGE_MODEL=qwen2.5:14b
+MEDDIAL_JUDGE_MODEL=qwen3.5:9b
 ```
 
 The weight digest is resolved from the running server at startup, so a run

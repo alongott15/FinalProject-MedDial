@@ -47,7 +47,7 @@ from meddial.llm import (
 from meddial.stats import StatsError
 
 DEFAULT_BASE_URL = "http://localhost:11434/v1"
-DEFAULT_JUDGE = "qwen2.5:14b"
+DEFAULT_JUDGE = "qwen3.5:9b"
 
 
 def build_parser() -> argparse.ArgumentParser:

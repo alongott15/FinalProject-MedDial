@@ -43,7 +43,8 @@ def resolve_ollama_digest(base_url: str, model_id: str, *, timeout_s: float = 30
     reproducible and must not start.
     """
     ensure_network_calls_allowed("resolve_ollama_digest")
-    show_url = base_url.rstrip("/").removesuffix("/v1") + "/api/show"
+    root = base_url.rstrip("/").removesuffix("/v1")
+    show_url = f"{root}/api/show"
     try:
         response = httpx.post(show_url, json={"name": model_id}, timeout=timeout_s)
         response.raise_for_status()
@@ -55,10 +56,36 @@ def resolve_ollama_digest(base_url: str, model_id: str, *, timeout_s: float = 30
 
     digest = payload.get("digest") or (payload.get("details") or {}).get("digest")
     if not digest:
+        # Ollama 0.17 dropped the digest from /api/show but still reports it
+        # in /api/tags. Fall back rather than fail: without a digest a run is
+        # not reproducible, and a tag alone can be repointed at new weights.
+        digest = _digest_from_tags(root, model_id, timeout_s=timeout_s)
+    if not digest:
         raise ProviderConfigurationError(
-            f"Ollama reported no digest for {model_id!r}; cannot record provenance."
+            f"Ollama reported no digest for {model_id!r} at {show_url} or {root}/api/tags; "
+            "cannot record provenance."
         )
     return str(digest)
+
+
+def _digest_from_tags(root: str, model_id: str, *, timeout_s: float) -> str | None:
+    """Look the digest up in the model list. ``None`` when the server has no answer."""
+    tags_url = f"{root}/api/tags"
+    try:
+        response = httpx.get(tags_url, timeout=timeout_s)
+        response.raise_for_status()
+        models = response.json().get("models") or []
+    except httpx.HTTPError as exc:
+        raise ProviderConfigurationError(
+            f"Could not resolve a weight digest for {model_id!r} from {tags_url}: {exc}"
+        ) from exc
+
+    for entry in models:
+        # Match the tag exactly. ``qwen3.5:9b`` and ``qwen3.5:4b`` are
+        # different weights, and picking the wrong one mislabels every score.
+        if entry.get("name") == model_id or entry.get("model") == model_id:
+            return entry.get("digest") or None
+    return None
 
 
 class LocalOpenAICompatibleProvider:
