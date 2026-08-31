@@ -12,11 +12,22 @@ close them before the results can support a publication. See those documents
 for the full specification; this README describes only what exists in the
 repository today.
 
-**Status:** repository hygiene (W0), the provider layer (W1), the knowledge
-policy layer (W2) and the evaluation rebuild (W3) are complete, except for the
-evaluator ensemble, which is deferred until the E0 measurement-confound
-experiment reports. The E0 harness is built and tested but has not been run:
-it needs the existing dialogue corpus, which is not part of this repository.
+**Status.** Built and unit-tested: repository hygiene (W0), the provider layer
+(W1), the knowledge policy layer (W2), the evaluation rebuild (W3), the
+benchmarks (W4), the cohort rebuild (W5), reference grounding (W6), the
+experiment harness (W7) and the analysis layer (W8). The evaluator ensemble is
+deferred until the E0 measurement-confound experiment reports. Downstream
+signal and privacy (W9) and manuscript scope enforcement (W10) have not been
+started.
+
+Two things are built but have never run against real data, and the difference
+matters when reading any result:
+
+- **E0** needs the existing dialogue corpus, which is not part of this
+  repository and is not on the development machine.
+- **The cohort** (`meddial/cohort/`) is tested against synthetic admission
+  records only; reproducing it needs credentialed MIMIC-III access.
+
 No MIMIC-III derived data ships here — see [Data](#data) below.
 
 ## What's here
@@ -28,8 +39,18 @@ No MIMIC-III derived data ships here — see [Data](#data) below.
 | `meddial/evaluation/` | Claim extraction, batched claim verification, role-separated faithfulness, naturalness, knowledge-boundary leakage, deterministic structural validity, acceptance gates, score provenance |
 | `meddial/evaluation/templates/` | Evaluator prompts as versioned files; a score records the hash of the template that produced it |
 | `meddial/stats/` | Case-clustered bootstrap, paired within-case comparison, Wilson intervals — the resampling unit is the case, not the dialogue |
-| `meddial/experiments/` | E0: re-scores an existing corpus under both reference modes and both roles, and reports the decomposition |
+| `meddial/experiments/` | E0 (re-scores an existing corpus under both reference modes and both roles) and the W7 run harness: versioned configs, immutable attempt records, five distinct variants, targeted repair, pure aggregation |
+| `meddial/experiments/backend.py` | The composition layer that makes the five variants executable — wires each architecture to injected providers and records what every call cost |
+| `meddial/grounding/` | The frozen entity matcher: normalisation rules as data, hash-locked specs, and the matcher's own error rate measured on a fixture |
+| `meddial/cohort/` | Deterministic cohort selection from structured fields only, with per-step exclusion counts and a hash manifest |
+| `meddial/benchmarks/` | Synthetic-only benchmarks: fault injection, per-class detector evaluation with localisation, retention across policies, policy discriminability |
+| `meddial/analysis/` | Paired case-clustered statistics, pre-registered power derivation, and one-command regeneration of every table and the primary figure |
+| `meddial/cli.py` | The `meddial-run` and `meddial-tables` console entry points |
 | `configs/policies/` | Knowledge policies as data — one JSON file per disclosure arm, hash-locked by `POLICY_HASHES.json` |
+| `configs/matchers/` | Matcher specifications and their fixtures, hash-locked by `MATCHER_HASHES.json` |
+| `configs/experiments/` | One run config per variant. Deliberately unfrozen: a confirmatory run must freeze them first |
+| `configs/cohort/` | The cohort selection criteria as SQL |
+| `uv.lock` | The resolved dependency tree. `pyproject.toml` pins ranges; this pins the resolution |
 | `Utils/bias_aware_prompts.py` | Every prompt the pipeline sends to a model, in one file |
 | `Utils/` | Dialogue markdown I/O, conversation variety, repetition filtering |
 | `dialogue_generation_framework.py` | Generates dialogues with iterative quality improvement |
@@ -37,12 +58,14 @@ No MIMIC-III derived data ships here — see [Data](#data) below.
 | `simulation.py` | Runs a single doctor–patient dialogue turn-by-turn |
 | `scripts/check_repository_hygiene.py` | CI guard: fails the build if restricted or identifier-shaped paths are present |
 | `scripts/run_e0.py` | Runs E0 tests 1–2 against a local judge; resumable, and refuses to write its output inside the repository |
-| `tests/` | Test suite (currently: repository hygiene guard) |
+| `tests/` | Test suite — 204 unit tests, all model calls mocked |
 | `.github/workflows/ci.yml` | CI: restricted-artifact guard, secret scan, test suite |
 
-Nothing under `gtmf/`, `output_dialogue_framework/`, or `analysis/` ships in
-this repository — those directories hold generated, MIMIC-derived output and
-are excluded by `.gitignore` and enforced by the hygiene guard.
+Nothing under the top-level `gtmf/`, `output_dialogue_framework/` or
+`analysis/` output directories ships in this repository — they hold generated,
+MIMIC-derived output, and are excluded by `.gitignore` and enforced by the
+hygiene guard. (The `analysis/` output directory is unrelated to the
+`meddial/analysis/` package, which is code and does ship.)
 
 ## Data
 
@@ -60,6 +83,11 @@ git clone https://github.com/alongott15/FinalProject-MedDial
 cd FinalProject-MedDial
 pip install -e ".[dev]"
 ```
+
+`pyproject.toml` pins version ranges, which is what the package publishes.
+`uv.lock` pins the exact resolution the results were produced against; install
+that instead with `uv sync --extra dev` when reproducing a run rather than
+developing.
 
 ## Model providers
 
@@ -193,6 +221,47 @@ them independently would understate every interval.
 
 The report decomposes; it does not conclude. Tests 3 and 4 require
 regeneration, and the manuscript framing is a decision for after all four.
+
+## Running an experiment
+
+One command runs one experimental cell — one variant, one policy, one seed —
+and a second regenerates every table from the records it wrote.
+
+```bash
+meddial-run \
+    --config configs/experiments/full_meddial.json \
+    --cases /path/outside/repo/cases.jsonl \
+    --out /path/outside/repo/runs
+
+meddial-tables \
+    --attempts /path/outside/repo/runs/runs/<run_id>/attempts/attempts.jsonl \
+    --out /path/outside/repo/tables
+```
+
+A case line is `{"case_id", "note_text", "reference": {...}}`. `note_text` is
+the unstructured note and is read only by `direct_llm`, which exists to show
+what the pipeline produces without a structured reference; every other variant
+needs `reference`. References are extracted upstream, not per attempt — two
+attempts on one case must be scored against one identical reference.
+
+The five configs in `configs/experiments/` are deliberately unfrozen: their
+model digests and input manifest read `UNPINNED:development` and `frozen_at`
+is null, so `--confirmatory` refuses them. Freezing thresholds, prompts and
+digests with a timestamp is a separate, recorded act that happens once, before
+the confirmatory run.
+
+Runs are resumable and attempts are append-only: re-running the same config
+skips completed cases and cannot overwrite an existing record. Changing a
+threshold or a prompt version changes the run identity, so a resumed run
+refuses to mix incomparable attempts rather than appending to the old one.
+
+`meddial-run` warns when the generator and judge share a model family. A judge
+from the generator's family inherits its blind spots, so the score stops being
+an independent check.
+
+Both commands refuse an output directory inside the repository: everything
+they write is derived from restricted data. Pass `--allow-in-repo` to override
+that deliberately.
 
 ## Running the hygiene guard and tests
 
