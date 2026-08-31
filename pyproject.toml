@@ -43,6 +43,7 @@ include = ["meddial*", "Agents*", "Utils*", "scripts*"]
 # Evaluator prompts are versioned artefacts, not incidental assets: a score's
 # prompt_version is the hash of one of these files, so they must ship.
 "meddial.evaluation" = ["templates/*.md"]
+"meddial.benchmarks" = ["templates/*.md", "fixtures/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

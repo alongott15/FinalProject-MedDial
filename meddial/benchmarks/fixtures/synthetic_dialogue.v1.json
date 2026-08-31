@@ -1,0 +1,32 @@
+{
+  "fixture_version": "1.0",
+  "synthetic": true,
+  "provenance": "Entirely authored for the public benchmark; no clinical record or external corpus contributed text.",
+  "case_id": "synthetic-headache-a",
+  "reference": {
+    "core": {
+      "symptoms": [
+        {"description": "dull headache", "onset": "this morning", "severity": "mild"}
+      ],
+      "diagnoses": [
+        {"primary": "tension headache"}
+      ],
+      "treatments": [
+        {"procedure": "oral hydration", "treatment": "rest in a quiet room"}
+      ]
+    },
+    "context": {
+      "medical_history": {"past_medical_history": "occasional seasonal allergies"},
+      "current_medications": [
+        {"name": "acetaminophen", "purpose": "headache relief"}
+      ]
+    },
+    "additional": {"chief_complaint": "mild headache"}
+  },
+  "dialogue": [
+    {"index": 0, "role": "Doctor", "text": "What brought you in today?"},
+    {"index": 1, "role": "Patient", "text": "I have had a dull mild headache since this morning."},
+    {"index": 2, "role": "Doctor", "text": "Have you noticed weakness, fever, or changes in vision?"},
+    {"index": 3, "role": "Patient", "text": "No, none of those."}
+  ]
+}
