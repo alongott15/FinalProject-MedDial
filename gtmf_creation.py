@@ -182,6 +182,17 @@ def provider_from_env(prefix: str = "MEDDIAL_GTMF") -> LLMProvider:
         quantisation=os.environ.get(f"{prefix}_QUANT", "unknown"),
     )
 
+class ExtractionError(RuntimeError):
+    """No chunk of a note yielded a parseable extraction.
+
+    Raised rather than returning an empty reference. A note that could not be
+    read must not produce a profile that looks like one that was: downstream,
+    an empty Structured Clinical Reference is indistinguishable from a genuinely
+    sparse case, and every metric computed against it silently counts a
+    successful extraction (D-08).
+    """
+
+
 def _chunk_medical_text_with_offsets(
     text: str, max_chunk_size: int = 3000, overlap: int = 200
 ) -> list[tuple[int, str]]:
@@ -228,11 +239,57 @@ def chunk_medical_text(
     ]
 
 
+def _repair_evidence_offsets(node, note_id: str, source_note: str) -> int:
+    """Recompute evidence offsets by locating each quoted span in the note.
+
+    Models quote accurately and count characters badly. In practice every span
+    qwen3.5:9b produced carried the right text and wrong integers, which made
+    100% of entities fail EvidenceSpan validation and left the reference
+    ungrounded -- GRND-1/2 measure extraction against coded truth, and they
+    cannot do that through evidence that never resolves.
+
+    So the quote is treated as the claim and the offsets as a derived value:
+    the text is searched for verbatim and the offsets rewritten from the match.
+    A quote that does not appear in the note is left exactly as the model
+    produced it, so a fabricated citation still fails validation instead of
+    being quietly relocated to whatever happens to match.
+
+    Returns the number of spans repaired. Mutates ``node`` in place.
+    """
+    repaired = 0
+    if isinstance(node, list):
+        for item in node:
+            repaired += _repair_evidence_offsets(item, note_id, source_note)
+        return repaired
+    if not isinstance(node, dict):
+        return repaired
+
+    for key, value in node.items():
+        if key == "evidence" and isinstance(value, list):
+            for span in value:
+                if not isinstance(span, dict):
+                    continue
+                text = span.get("text")
+                if not isinstance(text, str) or not text:
+                    continue
+                start = source_note.find(text)
+                if start < 0:
+                    continue
+                span["note_id"] = note_id
+                span["char_start"] = start
+                span["char_end"] = start + len(text)
+                repaired += 1
+        else:
+            repaired += _repair_evidence_offsets(value, note_id, source_note)
+    return repaired
+
+
 def extract_gtmf_chunked(
     medical_text: str,
     provider: LLMProvider,
     *,
     note_id: str = "source-note",
+    max_tokens: int = 4096,
 ) -> GTMF:
     schema_json = GTMF.model_json_schema()
     chunks = _chunk_medical_text_with_offsets(
@@ -278,7 +335,7 @@ def extract_gtmf_chunked(
                 ]),
                 classification=DataClassification.RESTRICTED_CLINICAL,
                 temperature=0.0,
-                max_tokens=2048,
+                max_tokens=max_tokens,
             ).text
             cleaned_result = aggressive_json_clean(result)
 
@@ -314,11 +371,18 @@ def extract_gtmf_chunked(
             continue
 
     if not all_extractions:
-        logger.error("No valid extractions obtained")
-        minimal_extraction = safe_json_parse_object("", "minimal_fallback")
-        all_extractions = [minimal_extraction]
+        raise ExtractionError(
+            f"No chunk of note {note_id!r} produced a parseable extraction "
+            f"({len(chunks)} chunk(s) attempted). Returning an empty reference "
+            "here would record the note as read when it was not. A truncated "
+            "response is the usual cause: raise max_tokens, or lower the "
+            "reasoning budget so the answer fits."
+        )
 
     merged_extraction = merge_gtmf_extractions(all_extractions)
+    repaired = _repair_evidence_offsets(merged_extraction, note_id, medical_text)
+    if repaired:
+        logger.info("Relocated %d evidence span(s) from their quoted text", repaired)
 
     try:
         reference = GTMF(**merged_extraction)

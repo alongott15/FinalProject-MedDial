@@ -81,7 +81,12 @@ def check_output_location(out: Path, *, allowed: bool) -> None:
 
 
 def _local_provider(
-    base_url: str, model_id: str, *, family: str, quantisation: str
+    base_url: str,
+    model_id: str,
+    *,
+    family: str,
+    quantisation: str,
+    reasoning_effort: str | None = None,
 ) -> LocalOpenAICompatibleProvider:
     """Build a local provider carrying the digest of the weights actually served.
 
@@ -95,6 +100,7 @@ def _local_provider(
         model_digest=digest,
         model_family=family,
         quantisation=quantisation,
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -210,6 +216,26 @@ def _scr_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quantisation", default="Q4_K_M")
     parser.add_argument("--limit", type=int, default=None, help="extract only the first N cases")
     parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=4096,
+        help=(
+            "completion budget per chunk [4096]. The GTMF schema alone is ~4.8k "
+            "characters and a truncated response is unparseable, so this is sized "
+            "for the answer rather than for the prompt."
+        ),
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        default="none",
+        help=(
+            "reasoning budget for the extractor [none]. Extraction emits a fixed "
+            "schema, so reasoning tokens are cost without benefit -- and on a "
+            "reasoning model they consume the whole max_tokens budget and leave "
+            "the message empty. Pass 'default' to restore the server's setting."
+        ),
+    )
+    parser.add_argument(
         "--allow-in-repo",
         action="store_true",
         help="permit an output directory inside the repository (C2: normally refused)",
@@ -225,6 +251,8 @@ def scr_main(argv: list[str] | None = None) -> int:
 
     args = _scr_parser().parse_args(argv)
     check_output_location(args.out, allowed=args.allow_in_repo)
+    if args.reasoning_effort == "default":
+        args.reasoning_effort = None
 
     try:
         manifest = json.loads(args.cohort.read_text(encoding="utf-8"))
@@ -257,6 +285,7 @@ def scr_main(argv: list[str] | None = None) -> int:
             args.extractor,
             family=args.extractor_family,
             quantisation=args.quantisation,
+            reasoning_effort=args.reasoning_effort,
         )
     except ProviderError as exc:
         raise SystemExit(f"Provider error: {exc}") from exc
@@ -279,7 +308,10 @@ def scr_main(argv: list[str] | None = None) -> int:
         print(f"[{index}/{len(todo)}] {case_id} ({len(record.note_text)} chars)")
         try:
             reference = extract_gtmf_chunked(
-                record.note_text, provider, note_id=case_id
+                record.note_text,
+                provider,
+                note_id=case_id,
+                max_tokens=args.max_tokens,
             )
         except ProviderError:
             # A provider outage is a run failure, not a case to skip: skipping

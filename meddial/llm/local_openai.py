@@ -22,8 +22,8 @@ import httpx
 
 from .classification import DataClassification, ensure_provider_compatible
 from .errors import (
-    ProviderConfigurationError,
     ProviderClassificationError,
+    ProviderConfigurationError,
     ProviderRateLimitError,
     ProviderResponseError,
     ProviderTimeoutError,
@@ -133,6 +133,7 @@ class LocalOpenAICompatibleProvider:
         model_family: str,
         quantisation: str,
         top_p: float = 1.0,
+        reasoning_effort: str | None = None,
         timeout_s: float = 300.0,
         max_retries: int = 3,
         client: httpx.Client | None = None,
@@ -151,6 +152,13 @@ class LocalOpenAICompatibleProvider:
         self._model_family = model_family
         self._quantisation = quantisation
         self._top_p = top_p
+        # A reasoning model spends its completion budget on reasoning tokens
+        # before it emits any content, and those tokens are invisible in the
+        # returned text while still being paid for. On a structured-extraction
+        # prompt qwen3.5:9b consumed all 2048 tokens reasoning and returned an
+        # empty message. ``"none"`` turns that off where the server supports
+        # it; ``None`` leaves the server's default alone.
+        self._reasoning_effort = reasoning_effort
         self._timeout_s = timeout_s
         self._max_retries = max_retries
         self._client = client
@@ -197,6 +205,8 @@ class LocalOpenAICompatibleProvider:
         }
         if seed is not None:
             payload["seed"] = seed
+        if self._reasoning_effort is not None:
+            payload["reasoning_effort"] = self._reasoning_effort
 
         started = time.monotonic()
         data = self._post_with_retries(payload)
@@ -274,12 +284,26 @@ class LocalOpenAICompatibleProvider:
 
     def _extract_text(self, data: dict[str, Any]) -> str:
         try:
-            text = data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            text = choice["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise ProviderResponseError(
                 f"{self._model_id} returned a response without a message body."
             ) from exc
         if not isinstance(text, str) or not text.strip():
+            # "Empty completion" is the symptom, not the cause. A reasoning
+            # model that hits the token ceiling mid-thought returns exactly
+            # this, and reporting it as an empty answer sends the reader
+            # looking at the prompt instead of the budget.
+            message = choice.get("message") or {}
+            reasoning = message.get("reasoning") or message.get("reasoning_content") or ""
+            if choice.get("finish_reason") == "length":
+                raise ProviderResponseError(
+                    f"{self._model_id} hit the max_tokens ceiling before emitting any "
+                    f"content ({len(str(reasoning))} characters of reasoning were "
+                    "produced instead). Raise max_tokens, or construct the provider "
+                    'with reasoning_effort="none" so the budget goes to the answer.'
+                )
             raise ProviderResponseError(
                 f"{self._model_id} returned an empty completion."
             )
