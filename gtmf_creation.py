@@ -9,7 +9,6 @@ from meddial.llm import (
     LLMProvider,
     LocalOpenAICompatibleProvider,
     ProviderConfigurationError,
-    ProviderError,
     resolve_ollama_digest,
     to_chat_messages,
 )
@@ -193,52 +192,6 @@ class ExtractionError(RuntimeError):
     """
 
 
-def _chunk_medical_text_with_offsets(
-    text: str, max_chunk_size: int = 3000, overlap: int = 200
-) -> list[tuple[int, str]]:
-    if len(text) <= max_chunk_size:
-        leading = len(text) - len(text.lstrip())
-        return [(leading, text.strip())] if text.strip() else []
-
-    chunks: list[tuple[int, str]] = []
-    start = 0
-
-    while start < len(text):
-        end = start + max_chunk_size
-
-        if end < len(text):
-            last_period = text.rfind('.', end - 200, end)
-            last_newline = text.rfind('\n', end - 200, end)
-
-            if last_period > start:
-                end = last_period + 1
-            elif last_newline > start:
-                end = last_newline + 1
-
-        raw_chunk = text[start:end]
-        leading = len(raw_chunk) - len(raw_chunk.lstrip())
-        chunk = raw_chunk.strip()
-        if chunk:
-            chunks.append((start + leading, chunk))
-
-        start = max(start + max_chunk_size - overlap, end)
-
-        if start >= len(text):
-            break
-
-    return chunks
-
-
-def chunk_medical_text(
-    text: str, max_chunk_size: int = 3000, overlap: int = 200
-) -> list[str]:
-    """Compatibility wrapper returning only chunk text."""
-    return [
-        chunk
-        for _, chunk in _chunk_medical_text_with_offsets(text, max_chunk_size, overlap)
-    ]
-
-
 def _repair_evidence_offsets(node, note_id: str, source_note: str) -> int:
     """Recompute evidence offsets by locating each quoted span in the note.
 
@@ -284,202 +237,123 @@ def _repair_evidence_offsets(node, note_id: str, source_note: str) -> int:
     return repaired
 
 
-DEFAULT_CHUNK_CHARS = 12000
-"""Chunk size, sized to the serving context rather than to a 4k default.
-
-3,000 characters was chosen when Ollama served a 4,096-token window, where the
-~1,200-token JSON schema left room for little else. At a 16k window a median
-discharge summary (7,429 characters in this cohort) fits in one call and the
-90th percentile (12,752) in two, so the schema is sent once or twice per note
-instead of three or four times. Fewer calls also means fewer merges, and a
-merge across chunk boundaries is where an entity split in half goes missing.
-"""
-
-
-def extract_gtmf_chunked(
+def extract_gtmf(
     medical_text: str,
     provider: LLMProvider,
     *,
     note_id: str = "source-note",
     max_tokens: int = 4096,
-    chunk_chars: int = DEFAULT_CHUNK_CHARS,
 ) -> GTMF:
-    schema_json = GTMF.model_json_schema()
-    chunks = _chunk_medical_text_with_offsets(
-        medical_text, max_chunk_size=chunk_chars, overlap=200
-    )
+    """Extract one Structured Clinical Reference from a whole note, in one call.
 
+    The note is not split. Splitting it cost more than it bought: the ~1,200
+    token JSON schema had to be resent with every piece, an entity described
+    across a boundary was seen whole by neither call, and merging partial
+    extractions made the result depend on where the boundary happened to fall.
+    A single call sees the note the way a reader does.
+
+    This is affordable because the whole note fits. The longest concatenated
+    discharge documentation in the 1,000-case cohort is 27,717 characters,
+    roughly 7,000 tokens; with the schema and a 4,096-token answer that is about
+    12,500 against a 16,384-token window. A note that does not fit truncates,
+    and a truncated answer is unparseable, so it raises :class:`ExtractionError`
+    rather than yielding a partial reference.
+    """
+    schema_json = GTMF.model_json_schema()
     system_message = GTMF_CREATION_PROMPT + """
 
     CRITICAL: Output ONLY valid JSON - no explanations, no markdown, no code blocks.
     Always start your response directly with the opening brace { and end with closing brace }"""
 
-    all_extractions = []
+    user_message = f"""
+    Extract medical information from this clinical note and format it according to the JSON schema below.
 
-    for i, (chunk_start, chunk) in enumerate(chunks):
-        user_message = f"""
-        Extract medical information from this clinical note chunk and format it according to the JSON schema below.
+    IMPORTANT: Respond with ONLY the JSON object, no other text.
 
-        IMPORTANT: Respond with ONLY the JSON object, no other text.
+    EVIDENCE SPANS:
+    - Set every evidence.note_id to exactly {json.dumps(note_id)}.
+    - evidence.text must be copied verbatim from the note.
+    - char_start and char_end are offsets into the note. Do not count
+      characters carefully; the quoted text is what matters and the offsets
+      are recomputed from it.
 
-        EVIDENCE SPANS:
-        - Set every evidence.note_id to exactly {json.dumps(note_id)}.
-        - char_start and char_end are absolute offsets in the full source note.
-        - This chunk begins at full-note offset {chunk_start}; add that offset
-          to positions measured inside the chunk.
-        - evidence.text must equal source_note[char_start:char_end] exactly.
+    JSON Schema:
+    {json.dumps(schema_json, indent=2)}
 
-        JSON Schema:
-        {json.dumps(schema_json, indent=2)}
+    Medical Note:
+    {medical_text}
 
-        Medical Note Chunk:
-        {chunk}
+    JSON Output:
+    """
 
-        JSON Output:
-        """
+    # C2: the note is MIMIC-derived, so it is labelled restricted and only a
+    # provider approved for that classification will accept it. A ProviderError
+    # propagates: a model that failed to answer is not a note without content.
+    result = provider.complete(
+        to_chat_messages([
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_message},
+        ]),
+        classification=DataClassification.RESTRICTED_CLINICAL,
+        temperature=0.0,
+        max_tokens=max_tokens,
+    ).text
 
-        try:
-            # C2: the chunk is MIMIC-derived, so it is labelled restricted and
-            # only a provider approved for that classification will accept it.
-            result = provider.complete(
-                to_chat_messages([
-                    {"role": "system", "content": system_message},
-                    {"role": "user", "content": user_message},
-                ]),
-                classification=DataClassification.RESTRICTED_CLINICAL,
-                temperature=0.0,
-                max_tokens=max_tokens,
-            ).text
-            cleaned_result = aggressive_json_clean(result)
-
-            json_start = -1
-            json_end = -1
-            brace_count = 0
-
-            for idx, char in enumerate(cleaned_result):
-                if char == '{':
-                    if json_start == -1:
-                        json_start = idx
-                    brace_count += 1
-                elif char == '}':
-                    brace_count -= 1
-                    if brace_count == 0 and json_start != -1:
-                        json_end = idx + 1
-                        break
-
-            if json_start >= 0 and json_end > json_start:
-                json_str = cleaned_result[json_start:json_end]
-                data = safe_json_parse_object(json_str, f"chunk_{i+1}")
-
-                if data and data != {}:
-                    all_extractions.append(data)
-
-        except ProviderError:
-            # D-08: a provider failure is not a parsing failure. Swallowing it
-            # here would let every chunk fail and still emit the minimal
-            # fallback profile below, as though the note had been read.
-            raise
-        except Exception as e:
-            logger.error(f"Error processing chunk {i+1}: {e}")
-            continue
-
-    if not all_extractions:
-        raise ExtractionError(
-            f"No chunk of note {note_id!r} produced a parseable extraction "
-            f"({len(chunks)} chunk(s) attempted). Returning an empty reference "
-            "here would record the note as read when it was not. A truncated "
-            "response is the usual cause: raise max_tokens, or lower the "
-            "reasoning budget so the answer fits."
-        )
-
-    merged_extraction = merge_gtmf_extractions(all_extractions)
-    repaired = _repair_evidence_offsets(merged_extraction, note_id, medical_text)
+    extraction = _first_json_object(aggressive_json_clean(result), note_id)
+    repaired = _repair_evidence_offsets(extraction, note_id, medical_text)
     if repaired:
         logger.info("Relocated %d evidence span(s) from their quoted text", repaired)
 
-    try:
-        reference = GTMF(**merged_extraction)
-        issues = reference.evidence_issues({note_id: medical_text})
-        if issues:
-            logger.warning(
-                "Extracted %d unresolved evidence span(s): %s",
-                len(issues),
-                "; ".join(f"{path}: {reason}" for path, reason in issues.items()),
-            )
-        unevidenced = reference.unevidenced_entities({note_id: medical_text})
-        if unevidenced:
-            logger.warning(
-                "Extracted %d entity/entities without resolvable evidence: %s",
-                len(unevidenced),
-                ", ".join(unevidenced),
-            )
-        return reference
-    except Exception as e:
-        logger.error(f"Error in extract_gtmf_chunked: {e}")
-        raise
+    reference = GTMF(**extraction)
+    issues = reference.evidence_issues({note_id: medical_text})
+    if issues:
+        logger.warning(
+            "Extracted %d unresolved evidence span(s): %s",
+            len(issues),
+            "; ".join(f"{path}: {reason}" for path, reason in issues.items()),
+        )
+    unevidenced = reference.unevidenced_entities({note_id: medical_text})
+    if unevidenced:
+        logger.warning(
+            "Extracted %d entity/entities without resolvable evidence: %s",
+            len(unevidenced),
+            ", ".join(unevidenced),
+        )
+    return reference
 
-def merge_gtmf_extractions(extractions: list[dict]) -> dict:
-    if not extractions:
-        raise ValueError("No extractions to merge")
 
-    if len(extractions) == 1:
-        return extractions[0]
+def _first_json_object(text: str, note_id: str) -> dict:
+    """The first balanced JSON object in a response, or raise.
 
-    merged = extractions[0].copy()
-    merged_symptoms = []
-    merged_diagnoses = []
-    merged_treatments = []
-    seen_symptoms = set()
-    seen_diagnoses = set()
-    seen_treatments = set()
+    An empty or unbalanced result means the note was not read -- most often a
+    truncated answer. Returning an empty reference instead would record the
+    note as read when it was not (D-08).
+    """
+    json_start, json_end, depth = -1, -1, 0
+    for index, char in enumerate(text):
+        if char == "{":
+            if json_start == -1:
+                json_start = index
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0 and json_start != -1:
+                json_end = index + 1
+                break
 
-    for extraction in extractions:
-        core_fields = extraction.get("Core_Fields", {})
+    data = {}
+    if json_start >= 0 and json_end > json_start:
+        data = safe_json_parse_object(text[json_start:json_end], note_id)
+    if not data:
+        raise ExtractionError(
+            f"Note {note_id!r} produced no parseable extraction. Returning an "
+            "empty reference here would record the note as read when it was "
+            "not. A truncated answer is the usual cause: raise max_tokens, "
+            "lower the reasoning budget, or widen the serving context so the "
+            "note and its answer both fit."
+        )
+    return data
 
-        for symptom in core_fields.get("Symptoms", []):
-            desc = symptom.get("description", "").strip().lower()
-            if desc and desc != "not provided" and desc not in seen_symptoms:
-                merged_symptoms.append(symptom)
-                seen_symptoms.add(desc)
-
-        for diagnosis in core_fields.get("Diagnoses", []):
-            primary = diagnosis.get("primary", "").strip().lower()
-            if primary and primary != "not provided" and primary not in seen_diagnoses:
-                merged_diagnoses.append(diagnosis)
-                seen_diagnoses.add(primary)
-
-        for treatment in core_fields.get("Treatment_Options", []):
-            procedure = treatment.get("procedure", "").strip().lower()
-            if procedure and procedure != "not provided" and procedure not in seen_treatments:
-                merged_treatments.append(treatment)
-                seen_treatments.add(procedure)
-
-    merged["Core_Fields"]["Symptoms"] = merged_symptoms
-    merged["Core_Fields"]["Diagnoses"] = merged_diagnoses
-    merged["Core_Fields"]["Treatment_Options"] = merged_treatments
-
-    for extraction in extractions[1:]:
-        context_fields = extraction.get("Context_Fields", {})
-
-        merged_allergies = merged.get("Context_Fields", {}).get("Allergies", [])
-        for allergy in context_fields.get("Allergies", []):
-            if allergy not in merged_allergies:
-                merged_allergies.append(allergy)
-        merged["Context_Fields"]["Allergies"] = merged_allergies
-
-        merged_current_meds = merged.get("Context_Fields", {}).get("Current_Medications", [])
-        for med in context_fields.get("Current_Medications", []):
-            if med not in merged_current_meds:
-                merged_current_meds.append(med)
-        merged["Context_Fields"]["Current_Medications"] = merged_current_meds
-
-        merged_discharge_meds = merged.get("Context_Fields", {}).get("Discharge_Medications", [])
-        for med in context_fields.get("Discharge_Medications", []):
-            if med not in merged_discharge_meds:
-                merged_discharge_meds.append(med)
-        merged["Context_Fields"]["Discharge_Medications"] = merged_discharge_meds
-
-    return merged
 
 def process_notes(results, provider: LLMProvider, output_dir: str = 'gtmf'):
     os.makedirs(output_dir, exist_ok=True)
@@ -539,7 +413,7 @@ def process_notes(results, provider: LLMProvider, output_dir: str = 'gtmf'):
                 'Discharge_Date': dis_formatted
             }
 
-            gtmf_instance = extract_gtmf_chunked(row['text'], provider)
+            gtmf_instance = extract_gtmf(row['text'], provider)
             quality_summary["total_processed"] += 1
 
             updated_demographics = Demographics.model_validate(demographics)
@@ -587,7 +461,7 @@ def main():
     structured tables and writes an auditable manifest, and meddial-scr
     extracts a reference for exactly the admissions that manifest names.
 
-    extract_gtmf_chunked and the parsing helpers in this module are unchanged
+    extract_gtmf and the parsing helpers in this module are unchanged
     and are what meddial-scr calls.
     """
     raise SystemExit(

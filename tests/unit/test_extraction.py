@@ -23,7 +23,7 @@ import pytest
 from gtmf_creation import (
     ExtractionError,
     _repair_evidence_offsets,
-    extract_gtmf_chunked,
+    extract_gtmf,
 )
 from meddial.llm import MockProvider
 
@@ -59,11 +59,11 @@ def _payload(*, char_start: int, char_end: int, note_id: str = "") -> str:
 # -- a note that was not read must not produce a profile --------------------
 
 
-def test_a_note_no_chunk_could_parse_raises_instead_of_an_empty_reference() -> None:
+def test_an_unparseable_answer_raises_instead_of_an_empty_reference() -> None:
     provider = MockProvider(["not json at all"])
 
     with pytest.raises(ExtractionError, match="parseable"):
-        extract_gtmf_chunked(NOTE, provider, note_id="s1")
+        extract_gtmf(NOTE, provider, note_id="s1")
 
 
 def test_the_refusal_names_the_note_and_the_usual_cause() -> None:
@@ -71,7 +71,7 @@ def test_the_refusal_names_the_note_and_the_usual_cause() -> None:
     provider = MockProvider(["{ truncated"])
 
     with pytest.raises(ExtractionError) as excinfo:
-        extract_gtmf_chunked(NOTE, provider, note_id="case-42")
+        extract_gtmf(NOTE, provider, note_id="case-42")
 
     message = str(excinfo.value)
     assert "case-42" in message
@@ -84,7 +84,7 @@ def test_the_refusal_names_the_note_and_the_usual_cause() -> None:
 def test_wrong_offsets_are_relocated_from_the_quoted_text() -> None:
     provider = MockProvider([_payload(char_start=999, char_end=1010)])
 
-    reference = extract_gtmf_chunked(NOTE, provider, note_id="s1")
+    reference = extract_gtmf(NOTE, provider, note_id="s1")
 
     span = reference.core.symptoms[0].evidence[0]
     assert span.char_start == NOTE.find("Sore throat")
@@ -95,7 +95,7 @@ def test_wrong_offsets_are_relocated_from_the_quoted_text() -> None:
 def test_the_note_id_is_stamped_even_when_the_model_leaves_it_blank() -> None:
     provider = MockProvider([_payload(char_start=0, char_end=1)])
 
-    reference = extract_gtmf_chunked(NOTE, provider, note_id="s1")
+    reference = extract_gtmf(NOTE, provider, note_id="s1")
 
     assert reference.core.symptoms[0].evidence[0].note_id == "s1"
 
@@ -124,7 +124,7 @@ def test_a_quote_absent_from_the_note_is_left_flagged_not_relocated() -> None:
     }
     provider = MockProvider([json.dumps(payload)])
 
-    reference = extract_gtmf_chunked(NOTE, provider, note_id="s1")
+    reference = extract_gtmf(NOTE, provider, note_id="s1")
 
     assert reference.evidence_issues({"s1": NOTE}), "a fabricated quote must stay flagged"
 
