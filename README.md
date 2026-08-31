@@ -23,15 +23,15 @@ No MIMIC-III derived data ships here — see [Data](#data) below.
 
 | Path | Purpose |
 |---|---|
-| `Agents/` | LLM agents: `PatientAgent`, `DoctorAgent`, `DeepEvalJudgeAgent`, `EHRSummarizerAgent`, `PromptImprovementAgent` |
+| `Agents/` | LLM agents: `PatientAgent`, `DoctorAgent`, `DeepEvalJudgeAgent`, `EHRSummarizerAgent`, `PromptImprovementAgent` — one `.md` per agent, indexed by [`Agents/README.md`](Agents/README.md) |
 | `meddial/knowledge/` | Structured Clinical Reference, field paths, index-diagnosis redaction, knowledge policies, per-participant contexts |
 | `meddial/evaluation/` | Claim extraction, batched claim verification, role-separated faithfulness, naturalness, knowledge-boundary leakage, deterministic structural validity, acceptance gates, score provenance |
 | `meddial/evaluation/templates/` | Evaluator prompts as versioned files; a score records the hash of the template that produced it |
 | `meddial/stats/` | Case-clustered bootstrap, paired within-case comparison, Wilson intervals — the resampling unit is the case, not the dialogue |
 | `meddial/experiments/` | E0: re-scores an existing corpus under both reference modes and both roles, and reports the decomposition |
 | `configs/policies/` | Knowledge policies as data — one JSON file per disclosure arm, hash-locked by `POLICY_HASHES.json` |
-| `Utils/` | Prompt templates, dialogue markdown I/O, repetition filtering |
-| `agent_prompts/` | Prompt text files consumed by each agent |
+| `Utils/bias_aware_prompts.py` | Every prompt the pipeline sends to a model, in one file |
+| `Utils/` | Dialogue markdown I/O, conversation variety, repetition filtering |
 | `dialogue_generation_framework.py` | Generates dialogues with iterative quality improvement |
 | `gtmf_creation.py` | Extracts Ground Truth Medical Forms (GTMF) from clinical notes |
 | `simulation.py` | Runs a single doctor–patient dialogue turn-by-turn |

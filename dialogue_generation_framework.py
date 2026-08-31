@@ -113,7 +113,14 @@ class DialogueGenerationPipeline:
         best_score = 0.0
         best_attempt_idx = -1
 
-        doctor_agent = DoctorAgent(self.generator_provider, patient_profile=patient_profile)
+        # The doctor's briefing is passed explicitly so it stays a separate
+        # factor from the patient's disclosure policy (D-05). None means "brief
+        # the doctor to match the patient", which is the uncrossed default.
+        doctor_agent = DoctorAgent(
+            self.generator_provider,
+            patient_profile=patient_profile,
+            guidance_id=self.doctor_guidance_id,
+        )
         patient_agent = PatientAgent(patient_profile, self.generator_provider)
 
         for attempt_idx in range(self.max_attempts):

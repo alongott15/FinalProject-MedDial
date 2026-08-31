@@ -1,6 +1,6 @@
 import logging
 from meddial.llm import DataClassification, LLMProvider, to_chat_messages
-from Utils.bias_aware_prompts import BASE_SYSTEM_PROMPT, PATIENT_PROFILE_TYPE_KNOWLEDGE
+from Utils.bias_aware_prompts import PATIENT_PROFILE_TYPE_KNOWLEDGE, PATIENT_SYSTEM_PROMPT
 from Utils.conversation_variety import PatientPersonality, create_varied_prompt_examples
 from Utils.repetition_filter import RepetitionTracker
 
@@ -91,59 +91,23 @@ class PatientAgent:
         if self.profile_type in ("FULL", "NO_DIAGNOSIS") and treatment_str:
             profile_section += f"- Treatment Plan (you know this): {treatment_str}\n"
 
-        # Profile-type-specific conclusion behaviour text (computed before building
-        # the system message so it can be used in implicit string concatenation below).
-        if self.profile_type in ("NO_DIAGNOSIS", "NO_DIAGNOSIS_NO_TREATMENT"):
-            conclusion_behaviour = (
-                "- **When doctor gives assessment/conclusion**: This is NEW information for you! "
-                "React with genuine curiosity — ask ONE follow-up question at a time about what this "
-                "means, what to expect, any side effects, lifestyle changes, or next steps. "
-                "Only say you have no more questions when you genuinely don't "
-                "(e.g. 'I think that covers everything, thank you.').\n\n"
-            )
-        else:
-            conclusion_behaviour = (
-                "- **When doctor gives assessment/conclusion**: Respond naturally — acknowledge "
-                "understanding, ask a clarifying question if needed, or express relief/concern\n\n"
-            )
+        # How the patient receives the doctor's assessment depends on whether any
+        # of it is news to them, which is a property of their disclosure policy.
+        conclusion_behaviour = PATIENT_PROFILE_TYPE_KNOWLEDGE.get(
+            self.profile_type,
+            PATIENT_PROFILE_TYPE_KNOWLEDGE["NO_DIAGNOSIS_NO_TREATMENT"],
+        )["conclusion_behaviour"]
 
         self.system_message = {
             "role": "system",
-            "content": (
-                f"{BASE_SYSTEM_PROMPT}\n\n"
-
-                "**YOUR ROLE:**\n"
-                f"You are {self.patient_persona} seeking medical help.\n"
-                f"Emotional state: {self.emotional_state}\n"
-                f"Communication style: {age_style_desc}\n\n"
-
-                f"{profile_section}\n"
-
-                f"{knowledge_instruction}\n\n"
-
-                "**CRITICAL GROUNDING RULES:**\n"
-                "1. ONLY discuss symptoms listed in your profile above\n"
-                "2. If the doctor asks about symptoms NOT in your profile, say you have not experienced them\n"
-                "3. Do NOT invent new symptoms, test results, or medical history\n"
-                "4. If you do not know a detail (exact duration, specific time), say you are not sure\n"
-                "5. Strictly follow your profile-type knowledge boundaries — see above\n\n"
-
-                "**NATURAL CONVERSATION BEHAVIOUR:**\n"
-                "- **Turn 1-2**: Share only your main concern briefly, with some initial hesitation\n"
-                "- **Turn 3-5**: When asked, reveal 1-2 additional symptoms gradually\n"
-                "- **Turn 6+**: Feel more comfortable — less hesitation, more direct answers\n"
-                f"{conclusion_behaviour}"
-
-                "**COMMUNICATION STYLE — VARY YOUR RESPONSES:**\n"
-                "- Use everyday language initially: 'my chest hurts', 'hard to breathe'\n"
-                "- Mirror the doctor's medical terms when they use them\n"
-                "- **IMPORTANT**: Do not start every response with 'Um...' or 'Well...'\n"
-                "  - Use hesitations ONLY when actually uncertain or uncomfortable\n"
-                "  - When answering clear questions, respond more directly\n"
-                "- Express uncertainty contextually: 'I think...', 'Maybe...', 'I am not sure if...'\n"
-                "- Do not ask 'Should I be worried?' repeatedly — vary your concerns\n"
-                "- Keep responses brief and natural (1-3 sentences typically)\n"
-            )
+            "content": PATIENT_SYSTEM_PROMPT.format(
+                persona=self.patient_persona,
+                emotional_state=self.emotional_state,
+                communication_style=age_style_desc,
+                profile_section=profile_section,
+                knowledge_instruction=knowledge_instruction,
+                conclusion_behaviour=conclusion_behaviour,
+            ),
         }
 
     # ── Profile-type helpers ────────────────────────────────────────────────

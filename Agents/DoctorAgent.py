@@ -1,7 +1,7 @@
 import logging
 import random
 from meddial.llm import DataClassification, LLMProvider, to_chat_messages
-from Utils.bias_aware_prompts import BASE_SYSTEM_PROMPT, PATIENT_PROFILE_TYPE_KNOWLEDGE
+from Utils.bias_aware_prompts import DOCTOR_GUIDANCE, DOCTOR_SYSTEM_PROMPT
 from Utils.conversation_variety import should_doctor_summarize, should_doctor_explain_reasoning, get_symptom_follow_up_question, DOCTOR_CLINICAL_REASONING, DOCTOR_EDUCATIONAL_PHRASES, create_varied_prompt_examples
 from Utils.repetition_filter import RepetitionTracker, detect_symptom_repetition
 
@@ -14,6 +14,7 @@ class DoctorAgent:
         provider: LLMProvider,
         patient_profile: dict = None,
         *,
+        guidance_id: str | None = None,
         temperature: float = 0.5,  # Higher than the summarizer for natural variation
         max_tokens: int = 300,
         seed: int | None = None,
@@ -67,120 +68,26 @@ class DoctorAgent:
 
         data_available = ", ".join(available_data_summary) if available_data_summary else "limited patient data"
 
-        # Profile-type context: what the patient already knows when they arrive
+        # What the doctor is briefed to expect is its own experimental factor
+        # (D-05). It defaults to the patient's policy so a normal run is
+        # unchanged, but the caller can cross the two, and only the caller may:
+        # reading the briefing off the patient's policy here is what made
+        # disclosure and briefing a single treatment in the thesis pipeline.
         profile_type = patient_profile.get("profile_type", "NO_DIAGNOSIS_NO_TREATMENT") if patient_profile else "NO_DIAGNOSIS_NO_TREATMENT"
         self.profile_type = profile_type
-        profile_knowledge = PATIENT_PROFILE_TYPE_KNOWLEDGE.get(
-            profile_type, PATIENT_PROFILE_TYPE_KNOWLEDGE["NO_DIAGNOSIS_NO_TREATMENT"]
+        self.guidance_id = guidance_id or profile_type
+        guidance = DOCTOR_GUIDANCE.get(
+            self.guidance_id, DOCTOR_GUIDANCE["NO_DIAGNOSIS_NO_TREATMENT"]
         )
-        profile_type_guidance = self._build_profile_type_guidance(profile_type, profile_knowledge)
 
         self.system_message = {
             "role": "system",
-            "content": (
-                f"{BASE_SYSTEM_PROMPT}\n\n"
-
-                "**YOUR ROLE:**\n"
-                f"You are a primary care physician conducting a consultation for a patient with a light, common medical issue.\n"
-                f"Patient demographics: {demographics_info}\n"
-                f"Available patient data: {data_available}\n\n"
-
-                f"{profile_type_guidance}\n\n"
-
-                "**CONSULTATION APPROACH FOR LIGHT CASES:**\n"
-                "1. Start with a warm greeting and open-ended question (e.g., 'How have you been feeling lately?')\n"
-                "2. Listen to patient's chief complaint and explore key symptoms with focused follow-up questions\n"
-                "3. PRIORITIZE the most important questions - quality over quantity\n"
-                "4. After 6-8 exchanges, if you have enough information, provide assessment and conclude\n"
-                "5. Show empathy naturally and contextually (not every turn)\n"
-                "6. Provide education and clinical reasoning - explain WHY you're asking certain questions\n"
-                "7. Occasionally summarize what you've heard to show active listening\n"
-                "8. Keep questions appropriate for a light, common condition (not severe/ICU-level)\n\n"
-
-                "**COMMUNICATION GUIDELINES - NATURAL CONVERSATION:**\n"
-                "- Vary your response style - don't start every response with 'Thank you' or 'I understand'\n"
-                "- Sometimes acknowledge briefly ('I see', 'Okay'), sometimes just continue directly\n"
-                "- Ask follow-up questions to explore symptoms in depth (severity, duration, triggers, alleviating factors)\n"
-                "- Build on what patient shares naturally\n"
-                "- Reference earlier parts of conversation when relevant\n"
-                "- Use transitional phrases: 'Let me ask about...', 'Tell me more about...'\n"
-                "- Occasionally explain your clinical thinking: 'Based on what you're describing...'\n"
-                "- Provide brief education when appropriate: 'What often happens with this is...'\n\n"
-
-                "**PROVIDE CLINICAL VALUE:**\n"
-                "- Explain likely mechanisms or causes in simple terms when appropriate\n"
-                "- Educate about warning signs to watch for\n"
-                "- Offer reassurance when findings suggest common, benign issues\n"
-                "- Provide practical self-care advice beyond just 'see your doctor'\n"
-                "- Help patient understand connections between symptoms\n\n"
-
-                "**AVOID REPETITION:**\n"
-                "- Don't ask about the same symptom multiple times unless seeking clarification\n"
-                "- Vary your phrasing and approach\n"
-                "- Don't repeat the same symptoms back to the patient every turn\n"
-                "- Progress the conversation forward\n\n"
-
-                "**CRITICAL GROUNDING RULES:**\n"
-                "- Base your questions and assessment ONLY on what the patient tells you in the conversation\n"
-                "- Do not assume or invent symptoms, test results, or history not mentioned\n"
-                "- If you're unsure about something, ask the patient directly\n"
-                "- Do not escalate a light case to severe diagnoses without strong evidence from conversation\n"
-                "- Stay focused on light, common conditions (cough, sore throat, headache, mild fever, etc.)\n"
-            )
+            "content": DOCTOR_SYSTEM_PROMPT.format(
+                demographics=demographics_info,
+                data_available=data_available,
+                guidance=guidance,
+            ),
         }
-
-
-    def _build_profile_type_guidance(self, profile_type: str, profile_knowledge: dict) -> str:
-        """
-        Return consultation guidance specific to what the patient already knows.
-
-        The doctor adapts its questioning strategy based on the patient's
-        starting knowledge state so the conversation remains coherent:
-
-        - FULL: patient already knows their diagnosis and treatment — the
-          consultation is about understanding, follow-up, or concerns.
-        - NO_DIAGNOSIS: patient knows their symptoms and medications but not
-          the diagnosis — the doctor should focus on reaching and explaining a diagnosis.
-        - NO_DIAGNOSIS_NO_TREATMENT: patient knows only symptoms — this is
-          typically a first consultation; the doctor gathers information and
-          then provides both diagnosis and treatment plan.
-        """
-        if profile_type == "FULL":
-            return (
-                "**PATIENT KNOWLEDGE CONTEXT — FULL PROFILE:**\n"
-                "This patient is already aware of their diagnosis and treatment plan. "
-                "They may reference their condition or medications during the consultation.\n"
-                "- Do NOT act surprised if the patient mentions their diagnosis by name.\n"
-                "- Focus questions on symptom details, current management, and any new concerns.\n"
-                "- Your assessment should align with or refine the patient's existing understanding.\n"
-                "- You can confirm or clarify the diagnosis the patient already knows."
-            )
-        elif profile_type == "NO_DIAGNOSIS":
-            return (
-                "**PATIENT KNOWLEDGE CONTEXT — NO DIAGNOSIS PROFILE:**\n"
-                "This patient knows their symptoms and current medications but has NOT been "
-                "told their formal diagnosis. They may mention their medications without knowing "
-                "what condition those medications treat.\n"
-                "- Do NOT assume the patient knows what is wrong with them.\n"
-                "- If the patient mentions medications, you may ask why they were prescribed "
-                "(but the patient may not know the reason).\n"
-                "- A key goal of this consultation is to gather enough information to reach "
-                "and clearly communicate a diagnosis.\n"
-                "- When you conclude, explain the diagnosis clearly — this may be new information "
-                "for the patient."
-            )
-        else:  # NO_DIAGNOSIS_NO_TREATMENT
-            return (
-                "**PATIENT KNOWLEDGE CONTEXT — SYMPTOMS ONLY PROFILE:**\n"
-                "This patient knows ONLY their symptoms. They have no prior diagnosis or "
-                "treatment plan for this condition — this is effectively a first consultation.\n"
-                "- The patient will not mention any diagnosis or treatment plan.\n"
-                "- Do NOT ask 'are you already on treatment for this?' unless symptom context "
-                "makes it clinically relevant.\n"
-                "- This consultation has two clear goals: (1) gather a thorough symptom picture "
-                "and (2) provide both a diagnosis and a treatment/management plan at the end.\n"
-                "- Conclude with a complete assessment: diagnosis + clear treatment recommendations."
-            )
 
     def _detect_patient_emotion(self, patient_message: str) -> str:
         message_lower = patient_message.lower()
