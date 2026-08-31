@@ -5,7 +5,6 @@ construct one themselves, so a run's model configuration is decided in one
 place and recorded in the manifest.
 """
 
-from .azure import AzureProvider
 from .classification import DataClassification, ensure_provider_compatible
 from .errors import (
     ProviderClassificationError,
@@ -27,7 +26,6 @@ from .provider import (
 )
 
 __all__ = [
-    "AzureProvider",
     "CallMetadata",
     "ChatMessage",
     "CompletionResult",

@@ -11,7 +11,6 @@ import httpx
 import pytest
 
 from meddial.llm import (
-    AzureProvider,
     DataClassification,
     LocalOpenAICompatibleProvider,
     MockProvider,
@@ -34,17 +33,6 @@ MESSAGES = [
 ]
 
 
-class _ExplodingClient:
-    """Any use of this client is a governance failure, so it fails the test."""
-
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def complete(self, **_: object) -> object:
-        self.calls += 1
-        raise AssertionError("A restricted payload reached the Azure transport.")
-
-
 def _ok_response(text: str = "Chest pain since this morning.") -> dict[str, object]:
     return {
         "choices": [{"message": {"role": "assistant", "content": text}}],
@@ -63,40 +51,6 @@ def _local_provider(handler: httpx.MockTransport, **kwargs: object):
         sleep=lambda _seconds: None,
         **kwargs,
     )
-
-
-def test_restricted_call_to_azure_raises_before_network() -> None:
-    """C2: MIMIC-derived text must not reach a hosted API, not even once."""
-    transport = _ExplodingClient()
-    provider = AzureProvider(
-        "gpt-4o",
-        model_family="gpt",
-        endpoint="https://example.invalid",
-        api_key="unused",
-        client=transport,
-    )
-
-    with pytest.raises(ProviderClassificationError) as excinfo:
-        provider.complete(
-            MESSAGES,
-            classification=RESTRICTED,
-            temperature=0.7,
-            max_tokens=256,
-        )
-
-    assert transport.calls == 0
-    assert "restricted_clinical" in str(excinfo.value)
-
-
-def test_azure_accepts_synthetic_payloads() -> None:
-    """The gate must not be so blunt that it blocks approved traffic."""
-    provider = AzureProvider("gpt-4o", model_family="gpt", client=_ExplodingClient())
-
-    # Raises from the exploding transport, not from the classification gate.
-    with pytest.raises(ProviderResponseError):
-        provider.complete(
-            MESSAGES, classification=SYNTHETIC, temperature=0.7, max_tokens=16
-        )
 
 
 def test_local_provider_is_approved_for_restricted_data() -> None:
@@ -202,14 +156,27 @@ def test_mock_provider_is_deterministic() -> None:
     assert first.text != other_seed.text
 
 
-def test_mock_provider_honours_its_own_classification_gate() -> None:
-    provider = MockProvider(approved=frozenset({DataClassification.PUBLIC}))
+def test_restricted_call_to_an_unapproved_provider_raises_before_io() -> None:
+    """GOV-3 / C2: MIMIC-derived text must not reach a provider not approved
+    for it, not even once.
 
-    with pytest.raises(ProviderClassificationError):
+    The gate is a property of the layer, not of any one provider: it runs in
+    ``ensure_provider_compatible`` before the provider records or transmits
+    anything, so an empty call log is the evidence that nothing was sent.
+    """
+    provider = MockProvider(approved=frozenset({DataClassification.PUBLIC, SYNTHETIC}))
+
+    with pytest.raises(ProviderClassificationError) as excinfo:
         provider.complete(
             MESSAGES, classification=RESTRICTED, temperature=0.7, max_tokens=64
         )
+
     assert provider.calls == []
+    assert "restricted_clinical" in str(excinfo.value)
+
+    # The gate must not be so blunt that it blocks approved traffic.
+    provider.complete(MESSAGES, classification=SYNTHETIC, temperature=0.7, max_tokens=64)
+    assert len(provider.calls) == 1
 
 
 def test_network_kill_switch_blocks_real_providers(monkeypatch) -> None:

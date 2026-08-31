@@ -31,7 +31,7 @@ class JudgeEvaluationError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Azure AI Foundry → deepeval adapter
+# LLMProvider → deepeval adapter
 # ---------------------------------------------------------------------------
 
 class ProviderDeepEvalLLM(DeepEvalBaseLLM):
@@ -92,8 +92,9 @@ class DeepEvalJudgeAgent:
 
     Parameters
     ----------
-    llm : AzureAIFoundryClient, optional
-        Pre-initialised Azure client. Loaded internally if not supplied.
+    provider : LLMProvider
+        Injected by the caller, never constructed here (GOV-4). Should come
+        from a different model family than the generator.
     threshold : float
         Minimum combined score to decide ``"REALISTIC"`` (default 0.70).
     weights : dict, optional
@@ -371,7 +372,7 @@ class DeepEvalJudgeAgent:
             raise JudgeEvaluationError(f"profile compliance GEval failed: {exc}") from exc
 
     # ------------------------------------------------------------------
-    # Metric 3 — RAGAS Faithfulness (manual, Azure AI Foundry)
+    # Metric 3 — RAGAS Faithfulness (manual, via the injected provider)
     # ------------------------------------------------------------------
 
     def _compute_ragas_faithfulness(

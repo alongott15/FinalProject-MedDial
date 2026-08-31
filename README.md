@@ -66,8 +66,8 @@ pip install -e ".[dev]"
 Generation runs against a locally served OpenAI-compatible endpoint (Ollama
 or vLLM). This is not a preference: MIMIC-III notes and everything derived
 from them are classified `RESTRICTED_CLINICAL`, and the provider layer
-refuses to send restricted payloads to a hosted API before it opens a
-socket. `AzureProvider` exists for public and synthetic payloads only.
+refuses to send restricted payloads to a provider not approved for them
+before it opens a socket. No hosted-API provider ships in this repository.
 
 Point the generator and judge at their models. Use different model families
 for the two — a judge scoring its own family's output is not independent

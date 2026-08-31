@@ -144,7 +144,7 @@ class CSVDataLoader:
 
 
 def csv_to_gtmf_workflow(csv_dir: str, output_path: str, limit: int = 50):
-    from gtmf_creation import AzureAIClient, process_notes
+    from gtmf_creation import process_notes, provider_from_env
     import json
 
     loader = CSVDataLoader(csv_dir)
@@ -158,10 +158,10 @@ def csv_to_gtmf_workflow(csv_dir: str, output_path: str, limit: int = 50):
         logger.error("No light case notes found")
         return {}
 
-    azure_client = AzureAIClient()
+    provider = provider_from_env()
 
     output_dir = os.path.dirname(output_path) if os.path.dirname(output_path) else 'gtmf'
-    quality_summary = process_notes(notes, azure_client, output_dir)
+    quality_summary = process_notes(notes, provider, output_dir)
 
     summary_path = os.path.join(output_dir, 'processing_summary.json')
     with open(summary_path, 'w', encoding='utf-8') as f:

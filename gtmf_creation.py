@@ -1,9 +1,15 @@
 import json
 import logging
-from azure.ai.inference import ChatCompletionsClient
-from azure.ai.inference.models import SystemMessage, UserMessage
-from azure.core.credentials import AzureKeyCredential
 from meddial.knowledge import GTMF
+from meddial.llm import (
+    DataClassification,
+    LLMProvider,
+    LocalOpenAICompatibleProvider,
+    ProviderConfigurationError,
+    ProviderError,
+    resolve_ollama_digest,
+    to_chat_messages,
+)
 from Utils.utils import format_date, calculate_age
 from Utils.bias_aware_prompts import GTMF_CREATION_PROMPT
 from Utils.markdown_gtmf import save_gtmf_markdown
@@ -155,35 +161,26 @@ def safe_json_parse_object(json_str: str, field_name: str = "") -> dict:
             "Additional_Context": {"Chief_Complaint": "not provided"}
         }
 
-class AzureAIClient:
-    def __init__(self, endpoint: str = None, api_key: str = None, model_name: str = "gpt-4.1"):
-        self.endpoint = endpoint or os.getenv("AZURE_AI_ENDPOINT")
-        self.api_key = api_key or os.getenv("AZURE_AI_API_KEY")
-        self.model_name = model_name
+def provider_from_env(prefix: str = "MEDDIAL_GTMF") -> LLMProvider:
+    """Build a local provider from ``{prefix}_BASE_URL`` / ``{prefix}_MODEL``.
 
-        if not self.endpoint or not self.api_key:
-            raise ValueError("Azure AI endpoint and API key must be provided")
-
-        self.client = ChatCompletionsClient(
-            endpoint=self.endpoint,
-            credential=AzureKeyCredential(self.api_key)
+    Decision D2: extraction reads MIMIC-III discharge summaries, so the only
+    approved destination is a model served on this host. Provisional — the W2
+    config layer replaces this with a run manifest.
+    """
+    base_url = os.environ.get(f"{prefix}_BASE_URL", "http://localhost:11434/v1")
+    model_id = os.environ.get(f"{prefix}_MODEL")
+    if not model_id:
+        raise ProviderConfigurationError(
+            f"Set {prefix}_MODEL to the model this run should use."
         )
-
-    def chat_completion(self, system_message: str, user_message: str, temperature: float = 0.0) -> str:
-        try:
-            response = self.client.complete(
-                messages=[
-                    SystemMessage(content=system_message),
-                    UserMessage(content=user_message)
-                ],
-                model=self.model_name,
-                temperature=temperature,
-                max_tokens=2048
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"Azure AI completion failed: {e}")
-            raise
+    return LocalOpenAICompatibleProvider(
+        base_url,
+        model_id,
+        model_digest=resolve_ollama_digest(base_url, model_id),
+        model_family=os.environ.get(f"{prefix}_FAMILY", model_id.split(":")[0]),
+        quantisation=os.environ.get(f"{prefix}_QUANT", "unknown"),
+    )
 
 def chunk_medical_text(text: str, max_chunk_size: int = 3000, overlap: int = 200) -> list[str]:
     if len(text) <= max_chunk_size:
@@ -215,7 +212,7 @@ def chunk_medical_text(text: str, max_chunk_size: int = 3000, overlap: int = 200
 
     return chunks
 
-def extract_gtmf_chunked(medical_text: str, azure_client: AzureAIClient) -> GTMF:
+def extract_gtmf_chunked(medical_text: str, provider: LLMProvider) -> GTMF:
     schema_json = GTMF.model_json_schema()
     chunks = chunk_medical_text(medical_text, max_chunk_size=3000, overlap=200)
 
@@ -242,7 +239,17 @@ def extract_gtmf_chunked(medical_text: str, azure_client: AzureAIClient) -> GTMF
         """
 
         try:
-            result = azure_client.chat_completion(system_message, user_message, temperature=0.0)
+            # C2: the chunk is MIMIC-derived, so it is labelled restricted and
+            # only a provider approved for that classification will accept it.
+            result = provider.complete(
+                to_chat_messages([
+                    {"role": "system", "content": system_message},
+                    {"role": "user", "content": user_message},
+                ]),
+                classification=DataClassification.RESTRICTED_CLINICAL,
+                temperature=0.0,
+                max_tokens=2048,
+            ).text
             cleaned_result = aggressive_json_clean(result)
 
             json_start = -1
@@ -267,6 +274,11 @@ def extract_gtmf_chunked(medical_text: str, azure_client: AzureAIClient) -> GTMF
                 if data and data != {}:
                     all_extractions.append(data)
 
+        except ProviderError:
+            # D-08: a provider failure is not a parsing failure. Swallowing it
+            # here would let every chunk fail and still emit the minimal
+            # fallback profile below, as though the note had been read.
+            raise
         except Exception as e:
             logger.error(f"Error processing chunk {i+1}: {e}")
             continue
@@ -347,7 +359,7 @@ def merge_gtmf_extractions(extractions: list[dict]) -> dict:
 
     return merged
 
-def process_notes(results, azure_client: AzureAIClient, output_dir: str = 'gtmf'):
+def process_notes(results, provider: LLMProvider, output_dir: str = 'gtmf'):
     os.makedirs(output_dir, exist_ok=True)
 
     # CRITICAL: Load existing GTMFs to avoid regeneration
@@ -405,7 +417,7 @@ def process_notes(results, azure_client: AzureAIClient, output_dir: str = 'gtmf'
                 'Discharge_Date': dis_formatted
             }
 
-            gtmf_instance = extract_gtmf_chunked(row['text'], azure_client)
+            gtmf_instance = extract_gtmf_chunked(row['text'], provider)
             quality_summary["total_processed"] += 1
 
             gtmf_instance = gtmf_instance.model_copy(update={
@@ -441,9 +453,9 @@ def process_notes(results, azure_client: AzureAIClient, output_dir: str = 'gtmf'
 
 def main():
     try:
-        azure_client = AzureAIClient()
-    except Exception as e:
-        logger.error(f"Failed to initialize Azure AI client: {e}")
+        provider = provider_from_env()
+    except ProviderError as e:
+        logger.error(f"Failed to initialize the local provider: {e}")
         return
 
     csv_dir = os.getenv("MIMIC_CSV_DIR")
@@ -474,7 +486,7 @@ def main():
 
     try:
         output_dir = 'gtmf'
-        summary = process_notes(results, azure_client, output_dir)
+        summary = process_notes(results, provider, output_dir)
 
         summary_path = os.path.join(output_dir, 'processing_summary.json')
         with open(summary_path, 'w', encoding='utf-8') as outfile:
