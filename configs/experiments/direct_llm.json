@@ -1,0 +1,45 @@
+{
+  "schema_version": "2.0",
+  "name": "meddial-direct-llm",
+  "variant": "direct_llm",
+  "patient_policy_id": "FULL",
+  "patient_policy_version": "2.0",
+  "doctor_guidance_id": "FULL",
+  "reference_mode": "full_reference",
+  "seed": 20260914,
+  "max_turns": 30,
+  "max_attempts": 1,
+  "thresholds": {
+    "patient_factuality": 0.8,
+    "doctor_factuality": 0.8,
+    "knowledge_boundary": 1.0,
+    "naturalness": 0.6,
+    "structural_validity": 1.0
+  },
+  "models": {
+    "judge": {
+      "id": "qwen3.5:32b",
+      "digest": "UNPINNED:development",
+      "family": "qwen",
+      "quantisation": "Q4_K_M"
+    },
+    "generator": {
+      "id": "mistral-small3.2:24b",
+      "digest": "UNPINNED:development",
+      "family": "mistral",
+      "quantisation": "Q4_K_M"
+    }
+  },
+  "prompt_versions": {
+    "generator": "UNPINNED:development"
+  },
+  "frozen_at": null,
+  "input_manifest_hash": "UNPINNED:development",
+  "batch_config": {
+    "max_batch_size": 8
+  },
+  "metadata": {
+    "study_phase": "architecture_ablation",
+    "note": "Lower bound: one unstructured case prompt, one completion. No structured reference, no policy, no repair."
+  }
+}
