@@ -13,6 +13,8 @@ Replaces the flat ``GTMF`` model. Two changes matter:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -23,6 +25,29 @@ class EvidenceSpan(BaseModel):
     char_start: int
     char_end: int
     text: str
+
+    def validation_error(self, source_note: str) -> str | None:
+        """Explain why this span does not resolve in ``source_note``.
+
+        Offsets come from a model and therefore cannot be trusted merely
+        because they are integers.  Validation is kept explicit rather than
+        rejecting the whole SCR: an unresolved entity is a measured/flagged
+        extraction defect, not a reason to silently drop the case.
+        """
+        if self.char_start < 0:
+            return "char_start is negative"
+        if self.char_end <= self.char_start:
+            return "char_end must be greater than char_start"
+        if self.char_end > len(source_note):
+            return f"char_end {self.char_end} exceeds note length {len(source_note)}"
+        resolved = source_note[self.char_start : self.char_end]
+        if resolved != self.text:
+            return f"offset text {resolved!r} does not equal recorded text {self.text!r}"
+        return None
+
+    def resolves_against(self, source_note: str) -> bool:
+        """Whether offsets and quoted text agree with a source note exactly."""
+        return self.validation_error(source_note) is None
 
 
 class _Evidenced(BaseModel):
@@ -140,14 +165,8 @@ class StructuredClinicalReference(BaseModel):
         """Stable per-case key. Analyses are clustered on this (STAT-1)."""
         return f"{self.subject_id}_{self.hadm_id}"
 
-    def unevidenced_entities(self) -> list[str]:
-        """Dotted paths of entities carrying no evidence span (KNOW-1).
-
-        Reported rather than raised: extraction recall is itself a measured
-        quantity (GRND-1/2), so an unevidenced entity is a finding, not a
-        crash.
-        """
-        missing: list[str] = []
+    def _evidenced_entities(self) -> list[tuple[str, _Evidenced]]:
+        entities: list[tuple[str, _Evidenced]] = []
         groups: list[tuple[str, list[_Evidenced]]] = [
             ("core.symptoms", list(self.core.symptoms)),
             ("core.diagnoses", list(self.core.diagnoses)),
@@ -155,15 +174,55 @@ class StructuredClinicalReference(BaseModel):
             ("context.current_medications", list(self.context.current_medications)),
             ("context.discharge_medications", list(self.context.discharge_medications)),
         ]
-        for path, entities in groups:
-            for index, entity in enumerate(entities):
-                if not entity.is_evidenced:
-                    missing.append(f"{path}[{index}]")
-        for t_index, treatment in enumerate(self.core.treatments):
-            for m_index, med in enumerate(treatment.medications):
-                if not med.is_evidenced:
-                    missing.append(f"core.treatments[{t_index}].medications[{m_index}]")
+        for path, values in groups:
+            entities.extend((f"{path}[{index}]", entity) for index, entity in enumerate(values))
+        for treatment_index, treatment in enumerate(self.core.treatments):
+            entities.extend(
+                (
+                    f"core.treatments[{treatment_index}].medications[{medication_index}]",
+                    medication,
+                )
+                for medication_index, medication in enumerate(treatment.medications)
+            )
+        return entities
+
+    def unevidenced_entities(
+        self, source_notes: Mapping[str, str] | None = None
+    ) -> list[str]:
+        """Dotted paths of entities carrying no evidence span (KNOW-1).
+
+        Reported rather than raised: extraction recall is itself a measured
+        quantity (GRND-1/2), so an unevidenced entity is a finding, not a
+        crash.
+        """
+        missing: list[str] = []
+        for path, entity in self._evidenced_entities():
+            if not entity.evidence:
+                missing.append(path)
+                continue
+            if source_notes is not None and not any(
+                span.note_id in source_notes
+                and span.resolves_against(source_notes[span.note_id])
+                for span in entity.evidence
+            ):
+                missing.append(path)
         return missing
+
+    def evidence_issues(self, source_notes: Mapping[str, str]) -> dict[str, str]:
+        """Return every unresolved span, keyed by its entity/span path."""
+        issues: dict[str, str] = {}
+        for path, entity in self._evidenced_entities():
+            for index, span in enumerate(entity.evidence):
+                source_note = source_notes.get(span.note_id)
+                if source_note is None:
+                    issues[f"{path}.evidence[{index}]"] = (
+                        f"unknown note_id {span.note_id!r}"
+                    )
+                    continue
+                error = span.validation_error(source_note)
+                if error is not None:
+                    issues[f"{path}.evidence[{index}]"] = error
+        return issues
 
 
 # Legacy name. Utils/markdown_gtmf.py and existing serialised references

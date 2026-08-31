@@ -1,6 +1,6 @@
 import json
 import logging
-from meddial.knowledge import GTMF
+from meddial.knowledge import GTMF, Demographics
 from meddial.llm import (
     DataClassification,
     LLMProvider,
@@ -182,11 +182,14 @@ def provider_from_env(prefix: str = "MEDDIAL_GTMF") -> LLMProvider:
         quantisation=os.environ.get(f"{prefix}_QUANT", "unknown"),
     )
 
-def chunk_medical_text(text: str, max_chunk_size: int = 3000, overlap: int = 200) -> list[str]:
+def _chunk_medical_text_with_offsets(
+    text: str, max_chunk_size: int = 3000, overlap: int = 200
+) -> list[tuple[int, str]]:
     if len(text) <= max_chunk_size:
-        return [text]
+        leading = len(text) - len(text.lstrip())
+        return [(leading, text.strip())] if text.strip() else []
 
-    chunks = []
+    chunks: list[tuple[int, str]] = []
     start = 0
 
     while start < len(text):
@@ -201,9 +204,11 @@ def chunk_medical_text(text: str, max_chunk_size: int = 3000, overlap: int = 200
             elif last_newline > start:
                 end = last_newline + 1
 
-        chunk = text[start:end].strip()
+        raw_chunk = text[start:end]
+        leading = len(raw_chunk) - len(raw_chunk.lstrip())
+        chunk = raw_chunk.strip()
         if chunk:
-            chunks.append(chunk)
+            chunks.append((start + leading, chunk))
 
         start = max(start + max_chunk_size - overlap, end)
 
@@ -212,9 +217,27 @@ def chunk_medical_text(text: str, max_chunk_size: int = 3000, overlap: int = 200
 
     return chunks
 
-def extract_gtmf_chunked(medical_text: str, provider: LLMProvider) -> GTMF:
+
+def chunk_medical_text(
+    text: str, max_chunk_size: int = 3000, overlap: int = 200
+) -> list[str]:
+    """Compatibility wrapper returning only chunk text."""
+    return [
+        chunk
+        for _, chunk in _chunk_medical_text_with_offsets(text, max_chunk_size, overlap)
+    ]
+
+
+def extract_gtmf_chunked(
+    medical_text: str,
+    provider: LLMProvider,
+    *,
+    note_id: str = "source-note",
+) -> GTMF:
     schema_json = GTMF.model_json_schema()
-    chunks = chunk_medical_text(medical_text, max_chunk_size=3000, overlap=200)
+    chunks = _chunk_medical_text_with_offsets(
+        medical_text, max_chunk_size=3000, overlap=200
+    )
 
     system_message = GTMF_CREATION_PROMPT + """
 
@@ -223,11 +246,18 @@ def extract_gtmf_chunked(medical_text: str, provider: LLMProvider) -> GTMF:
 
     all_extractions = []
 
-    for i, chunk in enumerate(chunks):
+    for i, (chunk_start, chunk) in enumerate(chunks):
         user_message = f"""
         Extract medical information from this clinical note chunk and format it according to the JSON schema below.
 
         IMPORTANT: Respond with ONLY the JSON object, no other text.
+
+        EVIDENCE SPANS:
+        - Set every evidence.note_id to exactly {json.dumps(note_id)}.
+        - char_start and char_end are absolute offsets in the full source note.
+        - This chunk begins at full-note offset {chunk_start}; add that offset
+          to positions measured inside the chunk.
+        - evidence.text must equal source_note[char_start:char_end] exactly.
 
         JSON Schema:
         {json.dumps(schema_json, indent=2)}
@@ -291,7 +321,22 @@ def extract_gtmf_chunked(medical_text: str, provider: LLMProvider) -> GTMF:
     merged_extraction = merge_gtmf_extractions(all_extractions)
 
     try:
-        return GTMF(**merged_extraction)
+        reference = GTMF(**merged_extraction)
+        issues = reference.evidence_issues({note_id: medical_text})
+        if issues:
+            logger.warning(
+                "Extracted %d unresolved evidence span(s): %s",
+                len(issues),
+                "; ".join(f"{path}: {reason}" for path, reason in issues.items()),
+            )
+        unevidenced = reference.unevidenced_entities({note_id: medical_text})
+        if unevidenced:
+            logger.warning(
+                "Extracted %d entity/entities without resolvable evidence: %s",
+                len(unevidenced),
+                ", ".join(unevidenced),
+            )
+        return reference
     except Exception as e:
         logger.error(f"Error in extract_gtmf_chunked: {e}")
         raise
@@ -420,24 +465,24 @@ def process_notes(results, provider: LLMProvider, output_dir: str = 'gtmf'):
             gtmf_instance = extract_gtmf_chunked(row['text'], provider)
             quality_summary["total_processed"] += 1
 
+            updated_demographics = Demographics.model_validate(demographics)
             gtmf_instance = gtmf_instance.model_copy(update={
                 "row_id": row['row_id'],
                 "subject_id": row['subject_id'],
                 "hadm_id": row['hadm_id'],
-                "Context_Fields": gtmf_instance.Context_Fields.model_copy(update={
-                    "Patient_Demographics": gtmf_instance.Context_Fields.Patient_Demographics.model_copy(update=demographics)
-                })
+                "context": gtmf_instance.context.model_copy(
+                    update={"demographics": updated_demographics}
+                ),
             })
-
-            result = gtmf_instance.model_dump()
-            result["light_case_filter"] = light_case_result
-            result["case_type"] = "LIGHT_COMMON_SYMPTOMS"
 
             subject_id = row['subject_id']
             hadm_id = row['hadm_id']
             filename = f"gtmf_{subject_id}_{hadm_id}.md"
             output_path = os.path.join(output_dir, filename)
-            save_gtmf_markdown(result, output_path)
+            # Pass the model, not a canonical-name dict: the Markdown
+            # compatibility layer is responsible for rendering aliases and
+            # embedding the lossless SCR payload (including evidence spans).
+            save_gtmf_markdown(gtmf_instance, output_path)
 
             quality_summary["gtmfs_created"] += 1
 

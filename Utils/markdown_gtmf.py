@@ -1,16 +1,45 @@
+import json
 import os
 import re
 from pathlib import Path
 from meddial.knowledge import GTMF, Symptom, Diagnosis, Medication, TreatmentOption
 
 
+_SCR_JSON_HEADING = "## Structured Clinical Reference JSON"
+_SCR_JSON_SECTION = re.compile(
+    rf"^{re.escape(_SCR_JSON_HEADING)}\s*$\s*```json\s*(\{{.*\}})\s*```\s*$",
+    re.MULTILINE | re.DOTALL,
+)
+
+
 def gtmf_to_markdown(gtmf: GTMF | dict[str, any]) -> str:
     if isinstance(gtmf, GTMF):
         # by_alias: the reference stores canonical snake_case names and
         # exposes the PascalCase form this renderer reads as aliases.
-        gtmf_dict = gtmf.model_dump(by_alias=True)
+        gtmf_dict = gtmf.model_dump(by_alias=True, mode="json")
+        machine_payload = gtmf_dict
     else:
-        gtmf_dict = gtmf
+        # Accept both canonical SCR dictionaries and legacy alias dictionaries.
+        # The human-readable renderer uses aliases; the embedded payload keeps
+        # the caller's complete mapping so unknown structured-code fields are
+        # not discarded.
+        machine_payload = gtmf
+        try:
+            gtmf_dict = GTMF.model_validate(gtmf).model_dump(
+                by_alias=True, mode="json"
+            )
+            for key in (
+                "profile_type",
+                "structured_diagnoses",
+                "structured_procedures",
+                "structured_prescriptions",
+            ):
+                if key in gtmf:
+                    gtmf_dict[key] = gtmf[key]
+        except Exception:
+            # Legacy partial mappings still get their historical best-effort
+            # rendering and a lossless machine payload.
+            gtmf_dict = gtmf
 
     lines = []
 
@@ -236,10 +265,30 @@ def gtmf_to_markdown(gtmf: GTMF | dict[str, any]) -> str:
     if has_structured:
         lines.extend(structured_lines)
 
+    # Markdown is the production storage format, so it must round-trip the
+    # SCR rather than only its prose presentation.  In particular, evidence
+    # offsets cannot be reconstructed from the human-readable bullets.
+    lines.extend(
+        [
+            "",
+            _SCR_JSON_HEADING,
+            "```json",
+            json.dumps(machine_payload, ensure_ascii=False, sort_keys=True),
+            "```",
+        ]
+    )
+
     return "\n".join(lines)
 
 
 def markdown_to_gtmf_dict(markdown_content: str) -> dict[str, any]:
+    embedded = _SCR_JSON_SECTION.search(markdown_content)
+    if embedded is not None:
+        payload = json.loads(embedded.group(1))
+        if not isinstance(payload, dict):
+            raise ValueError("embedded Structured Clinical Reference must be an object")
+        return payload
+
     gtmf = {
         'row_id': 0,
         'subject_id': 0,
