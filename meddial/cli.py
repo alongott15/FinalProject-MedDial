@@ -60,11 +60,16 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_BASE_URL = "http://localhost:11434/v1"
 DEFAULT_GENERATOR = "mistral-small3.2:24b"
 DEFAULT_JUDGE = "qwen3.5:9b"
-DEFAULT_EXTRACTOR = "qwen3.5:32b"
+DEFAULT_EXTRACTOR = "qwen3.5:35b"
 """Implementation Plan §12.4: use the largest extractor the hardware allows.
 
 Extraction errors propagate into every downstream metric, so this defaults
-higher than the judge rather than matching it.
+higher than the judge rather than matching it. The plan names ``qwen3.5:32b``,
+which Ollama does not publish; ``35b`` is the tag that exists.
+
+At Q4 this needs roughly 24 GB of weights before any KV cache, so on a smaller
+machine pass ``--extractor`` with the largest tag that fits. Swapping is not a
+slow run, it is a stalled one.
 """
 
 
