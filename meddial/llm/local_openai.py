@@ -12,15 +12,18 @@ digest from a running Ollama server so a config layer can supply it.
 
 from __future__ import annotations
 
+import ipaddress
 import time
 from collections.abc import Callable, Sequence
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
 from .classification import DataClassification, ensure_provider_compatible
 from .errors import (
     ProviderConfigurationError,
+    ProviderClassificationError,
     ProviderRateLimitError,
     ProviderResponseError,
     ProviderTimeoutError,
@@ -35,6 +38,32 @@ from .provider import (
 _APPROVED = frozenset(DataClassification)
 
 
+def _is_loopback_base_url(base_url: str) -> bool:
+    """Return whether ``base_url`` is unambiguously local to this host.
+
+    Merely naming this class ``LocalOpenAICompatibleProvider`` is not a
+    security boundary: without validating the endpoint, a caller could point
+    it at a hosted OpenAI-compatible API and the classification gate would
+    still approve restricted clinical text.  Hostnames other than
+    ``localhost`` are deliberately refused because DNS or ``/etc/hosts`` can
+    map them to a remote machine.
+    """
+    try:
+        parsed = urlsplit(base_url)
+        host = parsed.hostname
+    except ValueError:
+        return False
+    if parsed.scheme not in {"http", "https"} or not host:
+        return False
+    normalised = host.rstrip(".").lower()
+    if normalised == "localhost" or normalised.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(normalised).is_loopback
+    except ValueError:
+        return False
+
+
 def resolve_ollama_digest(base_url: str, model_id: str, *, timeout_s: float = 30.0) -> str:
     """Return the manifest digest Ollama reports for ``model_id``.
 
@@ -42,6 +71,10 @@ def resolve_ollama_digest(base_url: str, model_id: str, *, timeout_s: float = 30
     the model or reports no digest, because a run without a digest is not
     reproducible and must not start.
     """
+    if not _is_loopback_base_url(base_url):
+        raise ProviderConfigurationError(
+            f"Ollama digest resolution requires a loopback base URL, got {base_url!r}."
+        )
     ensure_network_calls_allowed("resolve_ollama_digest")
     root = base_url.rstrip("/").removesuffix("/v1")
     show_url = f"{root}/api/show"
@@ -141,6 +174,18 @@ class LocalOpenAICompatibleProvider:
         seed: int | None = None,
     ) -> CompletionResult:
         ensure_provider_compatible(self, classification)
+        if (
+            classification is DataClassification.RESTRICTED_CLINICAL
+            and not _is_loopback_base_url(self._base_url)
+        ):
+            # This check precedes both the CI network guard and construction
+            # of an HTTP request.  A mislabelled "local" provider therefore
+            # cannot transmit even one restricted payload.
+            raise ProviderClassificationError(
+                "Restricted clinical data may be sent only to a loopback "
+                f"OpenAI-compatible endpoint; refusing {self._base_url!r} "
+                "before network I/O."
+            )
         ensure_network_calls_allowed(type(self).__name__)
 
         payload: dict[str, Any] = {

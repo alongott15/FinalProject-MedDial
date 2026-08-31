@@ -33,6 +33,19 @@ MESSAGES = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _provider_unit_tests_use_only_stubbed_http(monkeypatch) -> None:
+    """Let MockTransport exercise HTTP semantics under CI's network guard.
+
+    CI exports ``MEDDIAL_DISABLE_EXTERNAL_CALLS=1`` for the full suite.  The
+    tests in this module deliberately instantiate the real provider class,
+    but every request is intercepted by ``httpx.MockTransport`` or a
+    monkeypatched ``httpx.get/post``.  Clear the process-level guard for each
+    such test; the dedicated kill-switch test sets it again explicitly.
+    """
+    monkeypatch.delenv("MEDDIAL_DISABLE_EXTERNAL_CALLS", raising=False)
+
+
 def _ok_response(text: str = "Chest pain since this morning.") -> dict[str, object]:
     return {
         "choices": [{"message": {"role": "assistant", "content": text}}],
@@ -177,6 +190,34 @@ def test_restricted_call_to_an_unapproved_provider_raises_before_io() -> None:
     # The gate must not be so blunt that it blocks approved traffic.
     provider.complete(MESSAGES, classification=SYNTHETIC, temperature=0.7, max_tokens=64)
     assert len(provider.calls) == 1
+
+
+def test_restricted_call_to_non_loopback_local_provider_raises_before_io() -> None:
+    """A class name cannot turn a hosted endpoint into an approved provider."""
+    requests: list[httpx.Request] = []
+
+    def _record(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json=_ok_response())
+
+    provider = LocalOpenAICompatibleProvider(
+        "https://hosted.example/v1",
+        "llama3.1:8b",
+        model_digest="sha256:abc123",
+        model_family="llama",
+        quantisation="Q4_K_M",
+        client=httpx.Client(transport=httpx.MockTransport(_record)),
+    )
+
+    with pytest.raises(ProviderClassificationError, match="loopback"):
+        provider.complete(
+            MESSAGES,
+            classification=RESTRICTED,
+            temperature=0.0,
+            max_tokens=64,
+        )
+
+    assert requests == []
 
 
 def test_network_kill_switch_blocks_real_providers(monkeypatch) -> None:
