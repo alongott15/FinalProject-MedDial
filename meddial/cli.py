@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,34 @@ At Q4 this needs roughly 24 GB of weights before any KV cache, so on a smaller
 machine pass ``--extractor`` with the largest tag that fits. Swapping is not a
 slow run, it is a stalled one.
 """
+
+
+MIMIC_CSV_DIR_ENV = "MIMIC_CSV_DIR"
+
+
+def _resolve_csv_dir(explicit: Path | None) -> Path:
+    """``--csv-dir`` if given, else ``MIMIC_CSV_DIR`` from the environment/.env.
+
+    The extract lives outside the repository under C2, so its path is a
+    per-machine setting rather than something to retype on every command.
+    An explicit flag always wins, so a second extract can be pointed at
+    without editing the environment.
+    """
+    if explicit is not None:
+        return explicit
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except ImportError:  # python-dotenv is a declared dependency; tolerate absence
+        pass
+    value = os.environ.get(MIMIC_CSV_DIR_ENV)
+    if not value:
+        raise SystemExit(
+            f"No MIMIC-III CSV directory: pass --csv-dir, or set {MIMIC_CSV_DIR_ENV} "
+            "in the environment or a .env file."
+        )
+    return Path(value)
 
 
 def check_output_location(out: Path, *, allowed: bool) -> None:
@@ -139,7 +168,12 @@ def _cohort_parser() -> argparse.ArgumentParser:
         description="Apply E1-E10 to a MIMIC-III CSV extract and write the private manifest.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--csv-dir", type=Path, required=True, help="MIMIC-III CSV directory")
+    parser.add_argument(
+        "--csv-dir",
+        type=Path,
+        default=None,
+        help=f"MIMIC-III CSV directory [${MIMIC_CSV_DIR_ENV}]",
+    )
     parser.add_argument("--out", type=Path, required=True, help="output directory, outside the repo")
     parser.add_argument("--n", type=int, default=DEFAULT_COHORT_SIZE, help="cases to select")
     parser.add_argument("--seed", type=int, default=DEFAULT_SAMPLING_SEED, help="sampling seed")
@@ -156,6 +190,7 @@ def cohort_main(argv: list[str] | None = None) -> int:
     from meddial.cohort.mimic_csv import MimicCsvError, MimicCsvSource
 
     args = _cohort_parser().parse_args(argv)
+    args.csv_dir = _resolve_csv_dir(args.csv_dir)
     check_output_location(args.out, allowed=args.allow_in_repo)
 
     try:
@@ -210,7 +245,12 @@ def _scr_parser() -> argparse.ArgumentParser:
         description="Extract a Structured Clinical Reference per admission in a cohort manifest.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("--csv-dir", type=Path, required=True, help="MIMIC-III CSV directory")
+    parser.add_argument(
+        "--csv-dir",
+        type=Path,
+        default=None,
+        help=f"MIMIC-III CSV directory [${MIMIC_CSV_DIR_ENV}]",
+    )
     parser.add_argument(
         "--cohort", type=Path, required=True, help="cohort_private_manifest.json"
     )
@@ -255,6 +295,7 @@ def scr_main(argv: list[str] | None = None) -> int:
     from Utils.markdown_gtmf import save_gtmf_markdown
 
     args = _scr_parser().parse_args(argv)
+    args.csv_dir = _resolve_csv_dir(args.csv_dir)
     check_output_location(args.out, allowed=args.allow_in_repo)
     if args.reasoning_effort == "default":
         args.reasoning_effort = None
