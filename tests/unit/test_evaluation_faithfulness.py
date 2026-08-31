@@ -498,6 +498,25 @@ def test_policy_context_reference_is_smaller_than_the_full_reference(masked_cont
     assert len(json.dumps(policy_view)) < len(json.dumps(full_view))
 
 
+def test_policy_context_reference_uses_the_scored_roles_permissions(masked_context):
+    patient_view = reference_payload(
+        masked_context,
+        ReferenceMode.POLICY_CONTEXT,
+        role=PATIENT_ROLE,
+    )
+    doctor_view = reference_payload(
+        masked_context,
+        ReferenceMode.POLICY_CONTEXT,
+        role=DOCTOR_ROLE,
+    )
+
+    assert "Shortness of breath" in json.dumps(patient_view)
+    assert "Shortness of breath" not in json.dumps(doctor_view)
+    assert set(doctor_view) == {"context"}
+    assert set(doctor_view["context"]) == {"demographics"}
+    assert doctor_view["context"]["demographics"]["age"] == 64
+
+
 def test_reference_payload_never_carries_evidence_spans(full_context):
     for mode in ReferenceMode:
         assert "evidence" not in json.dumps(reference_payload(full_context, mode))

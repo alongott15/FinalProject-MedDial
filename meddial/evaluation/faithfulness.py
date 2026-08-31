@@ -83,17 +83,29 @@ class VerificationResult:
     calls: int
 
 
-def reference_payload(context: EvaluatorContext, mode: ReferenceMode) -> dict[str, Any]:
+def reference_payload(
+    context: EvaluatorContext,
+    mode: ReferenceMode,
+    *,
+    role: str = PATIENT_ROLE,
+) -> dict[str, Any]:
     """The evidence a claim is checked against, chosen explicitly (EVAL-2).
 
-    ``POLICY_CONTEXT`` returns exactly what the patient was permitted to see
-    under the run's knowledge policy. ``FULL_REFERENCE`` returns the whole
-    clinical reference regardless of policy. Evidence spans are stripped from
-    both: they cite the source note, which the judge must not see.
+    ``POLICY_CONTEXT`` returns exactly what the requested role was permitted
+    to see under the run's knowledge policy. ``FULL_REFERENCE`` returns the
+    whole clinical reference regardless of role or policy. Evidence spans are
+    stripped from both: they cite the source note, which the judge must not
+    see.
     """
     if mode is ReferenceMode.FULL_REFERENCE:
         return strip_evidence(context.reference.model_dump(mode="json"))
-    return dict(context.policy.mask(context.reference, ParticipantRole.PATIENT))
+    participant = {
+        PATIENT_ROLE: ParticipantRole.PATIENT,
+        DOCTOR_ROLE: ParticipantRole.DOCTOR,
+    }.get(role)
+    if participant is None:
+        raise ValueError(f"unsupported faithfulness role {role!r}")
+    return dict(context.policy.mask(context.reference, participant))
 
 
 def render_reference(payload: Mapping[str, Any]) -> str:
@@ -223,7 +235,7 @@ def score_faithfulness(
     try:
         verification = verify_claims(
             factual,
-            reference_payload(context, reference_mode),
+            reference_payload(context, reference_mode, role=role),
             provider=provider,
             batched=batched,
             temperature=temperature,
