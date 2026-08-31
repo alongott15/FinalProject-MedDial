@@ -497,56 +497,31 @@ def process_notes(results, provider: LLMProvider, output_dir: str = 'gtmf'):
     return quality_summary
 
 def main():
-    try:
-        provider = provider_from_env()
-    except ProviderError as e:
-        logger.error(f"Failed to initialize the local provider: {e}")
-        return
+    """Refuse: this entry point selected cases by reading note text.
 
-    csv_dir = os.getenv("MIMIC_CSV_DIR")
+    It called CSVDataLoader.fetch_notes_with_light_case_filter, which ranks
+    notes by is_light_common_case -- a keyword scan over the note body. The
+    cohort design forbids exactly that: configs/cohort/criteria_v1.sql states
+    "No clinical eligibility decision is made from note vocabulary", because a
+    cohort chosen by reading the text is a function of the same text the study
+    then measures extraction against, and it cannot reproduce by hash (M3).
 
-    if not csv_dir:
-        logger.error("MIMIC_CSV_DIR environment variable not set")
-        return
+    The replacement is two commands: meddial-cohort applies E1-E10 to the
+    structured tables and writes an auditable manifest, and meddial-scr
+    extracts a reference for exactly the admissions that manifest names.
 
-    if not os.path.exists(csv_dir):
-        logger.error(f"CSV directory not found: {csv_dir}")
-        return
+    extract_gtmf_chunked and the parsing helpers in this module are unchanged
+    and are what meddial-scr calls.
+    """
+    raise SystemExit(
+        "gtmf_creation.main() has been withdrawn: it selected cases by scanning "
+        "note text, which the cohort criteria forbid and which cannot reproduce "
+        "by hash.\n\nUse instead:\n"
+        "  meddial-cohort --csv-dir <MIMIC_CSV_DIR> --out <dir outside repo>\n"
+        "  meddial-scr --csv-dir <MIMIC_CSV_DIR> --cohort <dir>/cohort_private_manifest.json "
+        "--out <dir outside repo>\n"
+    )
 
-    try:
-        from Utils.csv_data_loader import CSVDataLoader
-        loader = CSVDataLoader(csv_dir)
-        # Fetch more notes to reach target after skipping existing (95 existing + ~205 new = 300 total)
-        # Using 800 to ensure we have enough after light case filtering and skip-existing logic
-        results = loader.fetch_notes_with_light_case_filter(
-            category_filter="Discharge summary",
-            limit=10000000000000  # Increased to ensure we reach 300 total after filtering and skipping
-        )
-        if not results:
-            logger.error("No light case notes found")
-            return
-    except Exception as e:
-        logger.error(f"Error loading CSV data: {e}")
-        return
-
-    try:
-        output_dir = 'gtmf'
-        summary = process_notes(results, provider, output_dir)
-
-        summary_path = os.path.join(output_dir, 'processing_summary.json')
-        with open(summary_path, 'w', encoding='utf-8') as outfile:
-            json.dump(summary, outfile, indent=2)
-
-        print(f"\n=== GTMF Processing Summary ===")
-        print(f"Total processed: {summary['total_processed']}")
-        print(f"Skipped existing: {summary['skipped_existing']}")
-        print(f"GTMFs created (NEW): {summary['gtmfs_created']}")
-        print(f"Light cases passed: {summary['light_case_passed']}")
-        print(f"Light cases filtered: {summary['light_case_failed']}")
-        print(f"JSON parse failures: {summary['json_parse_failures']}")
-
-    except Exception as e:
-        logger.error(f"Error in main execution: {e}")
 
 if __name__ == '__main__':
     main()

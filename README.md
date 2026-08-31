@@ -43,6 +43,7 @@ No MIMIC-III derived data ships here — see [Data](#data) below.
 | `meddial/experiments/backend.py` | The composition layer that makes the five variants executable — wires each architecture to injected providers and records what every call cost |
 | `meddial/grounding/` | The frozen entity matcher: normalisation rules as data, hash-locked specs, and the matcher's own error rate measured on a fixture |
 | `meddial/cohort/` | Deterministic cohort selection from structured fields only, with per-step exclusion counts and a hash manifest |
+| `meddial/cohort/mimic_csv.py` | Reads the MIMIC-III CSV distribution into cohort candidates, reproducing `configs/cohort/criteria_v1.sql` without a Postgres instance |
 | `meddial/benchmarks/` | Synthetic-only benchmarks: fault injection, per-class detector evaluation with localisation, retention across policies, policy discriminability |
 | `meddial/analysis/` | Paired case-clustered statistics, pre-registered power derivation, and one-command regeneration of every table and the primary figure |
 | `meddial/cli.py` | The `meddial-run` and `meddial-tables` console entry points |
@@ -221,6 +222,46 @@ them independently would understate every interval.
 
 The report decomposes; it does not conclude. Tests 3 and 4 require
 regeneration, and the manuscript framing is a decision for after all four.
+
+## Building the cohort and the references
+
+The pipeline is four commands, each consuming the previous one's output. It
+starts from a MIMIC-III CSV extract containing `ADMISSIONS`, `PATIENTS`,
+`NOTEEVENTS`, `ICUSTAYS`, `PROCEDURES_ICD` and `DIAGNOSES_ICD`.
+
+```bash
+meddial-cohort \
+    --csv-dir /path/outside/repo/mimic-iii \
+    --out /path/outside/repo/cohort \
+    --n 200
+
+meddial-scr \
+    --csv-dir /path/outside/repo/mimic-iii \
+    --cohort /path/outside/repo/cohort/cohort_private_manifest.json \
+    --out /path/outside/repo/references
+```
+
+`meddial-cohort` applies criteria E1–E10 to the **structured** fields only —
+admission type, length of stay, ICD-9 code sets, a Quan et al. 2005 Charlson
+index — and never to note vocabulary. Eligibility decided by reading the note
+would make the cohort a function of the same text the study then measures
+extraction against. It prints the exclusion count at each criterion and writes
+them to the manifest, so the flow diagram is a by-product of selection rather
+than something reconstructed afterwards.
+
+The manifest also records a SHA-256 over the source CSVs. `meddial-scr`
+refuses to run if the extract it is pointed at does not hash to the same
+value, so a set of references cannot silently describe different data from the
+cohort that claims them. Extraction is resumable: a case whose reference file
+already exists is skipped, so an interrupted run continues where it stopped.
+
+The same `--seed` and the same extract reproduce the same cohort hash. Change
+either and you have a different cohort, which is the point.
+
+Note that `gtmf_creation.main()` is withdrawn. It selected cases with
+`is_light_common_case`, a keyword scan over the note body, which the criteria
+forbid and which cannot reproduce by hash. Its extraction internals are
+unchanged and are what `meddial-scr` calls.
 
 ## Running an experiment
 

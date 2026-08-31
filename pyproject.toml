@@ -25,6 +25,8 @@ dependencies = [
 ]
 
 [project.scripts]
+meddial-cohort = "meddial.cli:cohort_main"
+meddial-scr = "meddial.cli:scr_main"
 meddial-run = "meddial.cli:run_main"
 meddial-tables = "meddial.cli:tables_main"
 
