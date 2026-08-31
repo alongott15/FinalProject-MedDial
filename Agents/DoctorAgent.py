@@ -1,8 +1,14 @@
 import logging
-import random
+from collections.abc import Mapping
+
+from meddial.knowledge import DoctorContext
 from meddial.llm import DataClassification, LLMProvider, to_chat_messages
 from Utils.bias_aware_prompts import DOCTOR_GUIDANCE, DOCTOR_SYSTEM_PROMPT
-from Utils.conversation_variety import should_doctor_summarize, should_doctor_explain_reasoning, get_symptom_follow_up_question, DOCTOR_CLINICAL_REASONING, DOCTOR_EDUCATIONAL_PHRASES, create_varied_prompt_examples
+from Utils.conversation_variety import (
+    create_varied_prompt_examples,
+    should_doctor_explain_reasoning,
+    should_doctor_summarize,
+)
 from Utils.repetition_filter import RepetitionTracker, detect_symptom_repetition
 
 logging.basicConfig(level=logging.INFO)
@@ -14,6 +20,7 @@ class DoctorAgent:
         provider: LLMProvider,
         patient_profile: dict = None,
         *,
+        doctor_context: DoctorContext | None = None,
         guidance_id: str | None = None,
         temperature: float = 0.5,  # Higher than the summarizer for natural variation
         max_tokens: int = 300,
@@ -25,10 +32,17 @@ class DoctorAgent:
         self._temperature = temperature
         self._max_tokens = max_tokens
         self._seed = seed
-        self.patient_profile = patient_profile
+        # ``patient_profile`` remains as a compatibility input for callers
+        # outside the governed pipeline.  Production passes a DoctorContext,
+        # whose visible mapping cannot reach patient-only fields.
+        visible_profile: Mapping = (
+            doctor_context.visible
+            if doctor_context is not None
+            else (patient_profile or {})
+        )
+        self.patient_profile = dict(visible_profile)
         self.coach_feedback_to_incorporate = None
         self.conversation_phase = "opening"
-        self.discussed_symptoms = set()
         self.conversation_turn = 0
         self.last_patient_emotion = "neutral"
 
@@ -39,32 +53,29 @@ class DoctorAgent:
         demographics_info = "Not specified"
         available_data_summary = []
 
-        if patient_profile:
+        if visible_profile:
+            context_fields = visible_profile.get(
+                "Context_Fields", visible_profile.get("context", {})
+            )
+            core_fields = visible_profile.get("Core_Fields", visible_profile.get("core", {}))
+
             # Demographics
-            demo = patient_profile.get("Context_Fields", {}).get("Patient_Demographics", {})
+            demo = context_fields.get(
+                "Patient_Demographics", context_fields.get("demographics", {})
+            )
             if demo:
                 demographics_info = (
-                    f"Age: {demo.get('Age', 'Not provided')}, "
-                    f"Sex: {demo.get('Sex', 'Not provided')}"
+                    f"Age: {demo.get('Age', demo.get('age', 'Not provided'))}, "
+                    f"Sex: {demo.get('Sex', demo.get('sex', 'Not provided'))}"
                 )
 
             # Check what data is available
-            if patient_profile.get("Core_Fields", {}).get("Symptoms"):
+            if core_fields.get("Symptoms", core_fields.get("symptoms")):
                 available_data_summary.append("symptoms reported in profile")
-            if patient_profile.get("Context_Fields", {}).get("Medical_History"):
+            if context_fields.get("Medical_History", context_fields.get("medical_history")):
                 available_data_summary.append("medical history")
-            if patient_profile.get("Context_Fields", {}).get("Allergies"):
+            if context_fields.get("Allergies", context_fields.get("allergies")):
                 available_data_summary.append("allergy information")
-
-        # Extract key symptoms for guidance
-        self.key_symptoms = []
-        if patient_profile:
-            symptoms = patient_profile.get("Core_Fields", {}).get("Symptoms", [])
-            for symptom in symptoms:
-                if isinstance(symptom, dict):
-                    desc = symptom.get("description", "").strip()
-                    if desc:
-                        self.key_symptoms.append(desc.lower())
 
         data_available = ", ".join(available_data_summary) if available_data_summary else "limited patient data"
 
@@ -73,9 +84,17 @@ class DoctorAgent:
         # unchanged, but the caller can cross the two, and only the caller may:
         # reading the briefing off the patient's policy here is what made
         # disclosure and briefing a single treatment in the thesis pipeline.
-        profile_type = patient_profile.get("profile_type", "NO_DIAGNOSIS_NO_TREATMENT") if patient_profile else "NO_DIAGNOSIS_NO_TREATMENT"
+        profile_type = (
+            patient_profile.get("profile_type", "NO_DIAGNOSIS_NO_TREATMENT")
+            if patient_profile
+            else "NO_DIAGNOSIS_NO_TREATMENT"
+        )
         self.profile_type = profile_type
-        self.guidance_id = guidance_id or profile_type
+        self.guidance_id = (
+            guidance_id
+            or (doctor_context.guidance_id if doctor_context is not None else None)
+            or profile_type
+        )
         guidance = DOCTOR_GUIDANCE.get(
             self.guidance_id, DOCTOR_GUIDANCE["NO_DIAGNOSIS_NO_TREATMENT"]
         )
@@ -113,20 +132,6 @@ class DoctorAgent:
         else:
             self.conversation_phase = "conclusion"
 
-    def _track_clinical_findings(self, conversation_history: list):
-        if not conversation_history:
-            return
-
-        recent_patient_responses = [
-            msg['content'].lower() for msg in conversation_history[-4:]
-            if msg.get('role', '').lower() == 'patient'
-        ]
-
-        for response in recent_patient_responses:
-            for symptom in self.key_symptoms:
-                if symptom.lower() in response and symptom not in self.discussed_symptoms:
-                    self.discussed_symptoms.add(symptom)
-
     def respond(self, conversation_history: list) -> str:
         self.conversation_turn += 1
 
@@ -144,7 +149,12 @@ class DoctorAgent:
 
         # Update conversation tracking
         self._update_conversation_phase(self.conversation_turn, conversation_history)
-        self._track_clinical_findings(conversation_history)
+        patient_turn_count = sum(
+            1
+            for message in conversation_history
+            if message.get("role", "").lower() == "patient"
+            and message.get("content", "").strip()
+        )
 
         # Detect patient emotion for empathetic responses
         if conversation_history and conversation_history[-1].get('role', '').lower() == 'patient':
@@ -158,10 +168,10 @@ class DoctorAgent:
         elif self.conversation_phase == "exploration":
             phase_guidance = "Explore symptoms in depth with FOCUSED follow-up questions (severity, duration, triggers). Prioritize the most relevant questions."
             # Suggest clinical depth
-            if should_doctor_summarize(self.conversation_turn, len(self.discussed_symptoms)):
+            if should_doctor_summarize(self.conversation_turn, patient_turn_count):
                 phase_guidance += " Consider briefly summarizing what you've learned so far."
             # Encourage natural transition to conclusion if sufficient coverage
-            if self.conversation_turn >= 6 and len(self.discussed_symptoms) >= 2:
+            if self.conversation_turn >= 6 and patient_turn_count >= 2:
                 phase_guidance += " You have gathered good information. After your next question or two, start transitioning toward a conclusion by saying something like 'Based on what you've shared...' or 'Let me explain what I'm thinking...'"
 
         elif self.conversation_phase == "synthesis":
@@ -185,16 +195,11 @@ class DoctorAgent:
             else:
                 phase_guidance = "Provide clear assessment, practical self-care advice, and warning signs to watch for. End by asking 'Does that make sense?' or 'Do you have any questions?' to allow patient to acknowledge understanding NATURALLY."
 
-        # Track symptom exploration with follow-up suggestions
-        remaining_symptoms = [s for s in self.key_symptoms if s not in self.discussed_symptoms]
+        # Give only generic follow-up guidance based on what has actually been
+        # said.  The previous implementation injected the reference's expected
+        # symptom names here before the patient disclosed them.
         symptom_hint = ""
-        if remaining_symptoms and self.conversation_turn <= 10:
-            # Provide specific follow-up question suggestion
-            first_symptom = remaining_symptoms[0]
-            follow_up = get_symptom_follow_up_question(first_symptom)
-            symptom_hint = f"Unexplored symptoms: {', '.join(remaining_symptoms[:2])}. Example follow-up: '{follow_up}'"
-        elif self.discussed_symptoms and self.conversation_turn <= 8:
-            # Suggest deeper exploration of discussed symptoms
+        if patient_turn_count and self.conversation_turn <= 8:
             symptom_hint = "Ask deeper follow-up questions about symptoms already mentioned (severity, duration, what makes it better/worse)."
 
         # Check for symptom over-repetition

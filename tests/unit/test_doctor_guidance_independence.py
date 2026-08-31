@@ -13,6 +13,8 @@ These tests fail if the coupling is reintroduced.
 from __future__ import annotations
 
 from Agents.DoctorAgent import DoctorAgent
+from dialogue_generation_framework import DialogueGenerationPipeline
+from meddial.knowledge import DoctorContext
 from meddial.llm import MockProvider
 from Utils.bias_aware_prompts import DOCTOR_GUIDANCE
 
@@ -68,3 +70,53 @@ def test_the_doctor_is_never_handed_the_diagnosis() -> None:
     agent = DoctorAgent(MockProvider(["ok"]), patient_profile=profile)
 
     assert "pharyngitis" not in agent.system_message["content"].lower()
+
+
+def test_doctor_context_is_the_agents_only_structured_view() -> None:
+    visible = {"context": {"demographics": {"age": 41, "sex": "F"}}}
+    context = DoctorContext(guidance_id="FULL", visible=visible)
+
+    agent = DoctorAgent(MockProvider(["ok"]), doctor_context=context)
+
+    assert agent.patient_profile == visible
+    assert agent.guidance_id == "FULL"
+    assert "Age: 41" in agent.system_message["content"]
+
+
+def test_hidden_expected_symptoms_are_not_injected_into_doctor_calls() -> None:
+    # The sentinel must not be a phrase that DOCTOR_GUIDANCE itself uses as an
+    # illustration -- "sore throat" appears verbatim in the FULL briefing's
+    # "this is a light, common complaint" example, so asserting on it reports a
+    # leak that never happened.  An implausible symptom can only reach the
+    # rendered call by being injected from the profile.
+    profile = dict(
+        PROFILE,
+        Core_Fields=dict(
+            PROFILE["Core_Fields"],
+            Symptoms=[{"description": "zzqx paraesthesia for four days"}],
+        ),
+    )
+    provider = MockProvider(["What brings you in today?"])
+    agent = DoctorAgent(provider, patient_profile=profile, guidance_id="FULL")
+
+    agent.respond([])
+
+    rendered_call = "\n".join(message.content for message in provider.calls[0].messages)
+    assert "zzqx" not in rendered_call.lower()
+
+
+def test_pipeline_builds_doctor_from_doctor_context_not_patient_profile(tmp_path) -> None:
+    generator = MockProvider(["ok"], model_family="generator")
+    judge = MockProvider(["ok"], model_family="judge")
+    pipeline = DialogueGenerationPipeline(
+        generator,
+        judge,
+        output_dir=tmp_path,
+    )
+    visible = {"context": {"demographics": {"age": 41, "sex": "F"}}}
+    doctor_context = DoctorContext(guidance_id="FULL", visible=visible)
+
+    doctor, patient = pipeline._build_dialogue_agents(PROFILE, doctor_context)
+
+    assert doctor.patient_profile == visible
+    assert patient.profile is PROFILE

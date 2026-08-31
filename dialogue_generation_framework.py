@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from meddial.knowledge import (
+    DoctorContext,
     PolicyRegistry,
     StructuredClinicalReference,
     build_contexts,
@@ -98,10 +99,29 @@ class DialogueGenerationPipeline:
 
         logger.info("Pipeline initialized successfully")
 
+    def _build_dialogue_agents(
+        self,
+        patient_profile: dict,
+        doctor_context: DoctorContext | None,
+    ) -> tuple[DoctorAgent, PatientAgent]:
+        """Construct agents from their separate, least-privilege views."""
+        doctor_agent = DoctorAgent(
+            self.generator_provider,
+            doctor_context=doctor_context,
+            guidance_id=(
+                doctor_context.guidance_id
+                if doctor_context is not None
+                else self.doctor_guidance_id
+            ),
+        )
+        patient_agent = PatientAgent(patient_profile, self.generator_provider)
+        return doctor_agent, patient_agent
+
     def generate_dialogue_with_iterations(
         self,
         patient_profile: dict,
         full_profile: dict,
+        doctor_context: DoctorContext | None = None,
     ) -> dict:
         profile_id = f"{patient_profile.get('subject_id', 'unknown')}_{patient_profile.get('hadm_id', 'unknown')}"
         logger.info(f"\n{'='*60}")
@@ -116,12 +136,9 @@ class DialogueGenerationPipeline:
         # The doctor's briefing is passed explicitly so it stays a separate
         # factor from the patient's disclosure policy (D-05). None means "brief
         # the doctor to match the patient", which is the uncrossed default.
-        doctor_agent = DoctorAgent(
-            self.generator_provider,
-            patient_profile=patient_profile,
-            guidance_id=self.doctor_guidance_id,
+        doctor_agent, patient_agent = self._build_dialogue_agents(
+            patient_profile, doctor_context
         )
-        patient_agent = PatientAgent(patient_profile, self.generator_provider)
 
         for attempt_idx in range(self.max_attempts):
             logger.info(f"  Attempt {attempt_idx + 1}/{self.max_attempts}")
@@ -259,7 +276,7 @@ class DialogueGenerationPipeline:
         )
 
         dialogue_result = self.generate_dialogue_with_iterations(
-            partial_profile, full_profile
+            partial_profile, full_profile, contexts.doctor
         )
 
         if not dialogue_result['success']:
