@@ -121,6 +121,7 @@ def _local_provider(
     family: str,
     quantisation: str,
     reasoning_effort: str | None = None,
+    timeout_s: float | None = None,
 ) -> LocalOpenAICompatibleProvider:
     """Build a local provider carrying the digest of the weights actually served.
 
@@ -135,6 +136,7 @@ def _local_provider(
         model_family=family,
         quantisation=quantisation,
         reasoning_effort=reasoning_effort,
+        **({} if timeout_s is None else {"timeout_s": timeout_s}),
     )
 
 
@@ -270,6 +272,17 @@ def _scr_parser() -> argparse.ArgumentParser:
     parser.add_argument("--quantisation", default="Q4_K_M")
     parser.add_argument("--limit", type=int, default=None, help="extract only the first N cases")
     parser.add_argument(
+        "--timeout",
+        type=float,
+        default=1800.0,
+        help=(
+            "seconds to wait for one extraction call [1800]. The provider's 300s "
+            "default is a chat timeout: a whole-note extraction on modest hardware "
+            "exceeds it, and because a timeout is retried, each case then burns "
+            "three full timeouts and produces nothing."
+        ),
+    )
+    parser.add_argument(
         "--max-tokens",
         type=int,
         default=4096,
@@ -341,6 +354,7 @@ def scr_main(argv: list[str] | None = None) -> int:
             family=args.extractor_family,
             quantisation=args.quantisation,
             reasoning_effort=args.reasoning_effort,
+            timeout_s=args.timeout,
         )
     except ProviderError as exc:
         raise SystemExit(f"Provider error: {exc}") from exc
