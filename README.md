@@ -295,7 +295,16 @@ It needs PhysioNet credentialing with BigQuery access approved for the same
 Google account, and a Google Cloud project of your own; the six tables cost a
 few GB of scan against the monthly free tier, and `--bq-max-gib` refuses a
 query that would scan more than 64 GiB so a mistyped dataset name fails rather
-than bills. Both backends share one reader
+than bills.
+
+Pass `--bq-cache-dir` to both commands to download each table once and read it
+locally afterwards. Both commands read all six tables, so without it the scan is
+paid twice. It does not change the cohort: the manifest still records the
+`bigquery-sha256:` snapshot, so the selection reproduces on a machine with no
+cache, and a cache written from a different state of `physionet-data` is refused
+rather than silently mixed with the current one. Hashing the downloaded bytes
+instead would make the cohort a property of one machine's dump. The cache holds
+MIMIC-III itself, so it belongs outside the repository under C2. Both backends share one reader
 (`meddial/cohort/mimic_source.py`), so they yield the same candidates and the
 same exclusion flow.
 

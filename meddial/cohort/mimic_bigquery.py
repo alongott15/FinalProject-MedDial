@@ -27,8 +27,10 @@ provenance hash for a source whose bytes cannot be read.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from collections.abc import Iterator, Sequence
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -90,6 +92,7 @@ class MimicBigQuerySource(MimicSource):
         notes_dataset: str = DEFAULT_NOTES_DATASET,
         client: Any | None = None,
         max_gib_billed: float | None = DEFAULT_MAX_GIB_BILLED,
+        cache_dir: str | Path | None = None,
     ) -> None:
         if not billing_project:
             raise MimicBigQueryError(
@@ -104,6 +107,7 @@ class MimicBigQuerySource(MimicSource):
         )
         self._client = client if client is not None else _default_client(billing_project)
         self._snapshot_hash: str | None = None
+        self.cache_dir = Path(cache_dir) if cache_dir is not None else None
 
     # -- provenance --------------------------------------------------------
 
@@ -156,7 +160,13 @@ class MimicBigQuerySource(MimicSource):
     # -- tables ------------------------------------------------------------
 
     def table(self, name: str, *, parse_dates: Sequence[str] = ()) -> pd.DataFrame:
-        return _typed(self._rows(name).to_dataframe(), parse_dates)
+        cached = self._cache_path(name)
+        if cached is not None and cached.is_file():
+            return _typed(pd.read_parquet(cached), parse_dates)
+        frame = self._rows(name).to_dataframe()
+        if cached is not None:
+            self._write_cache(cached, frame)
+        return _typed(frame, parse_dates)
 
     def iter_table(
         self,
@@ -165,8 +175,96 @@ class MimicBigQuerySource(MimicSource):
         parse_dates: Sequence[str] = (),
         chunk_rows: int = NOTE_CHUNK_ROWS,
     ) -> Iterator[pd.DataFrame]:
-        for chunk in self._rows(name, page_size=chunk_rows).to_dataframe_iterable():
-            yield _typed(chunk, parse_dates)
+        cached = self._cache_path(name)
+        if cached is not None and cached.is_file():
+            yield from self._iter_cache(cached, parse_dates, chunk_rows)
+            return
+
+        # Not cached: stream from BigQuery and write each chunk as it arrives.
+        # Collecting the table to write it once would defeat the reason this
+        # method exists -- NOTEEVENTS does not fit comfortably in memory.
+        writer = None
+        try:
+            for chunk in self._rows(name, page_size=chunk_rows).to_dataframe_iterable():
+                if cached is not None:
+                    writer = self._append_cache(writer, cached, chunk)
+                yield _typed(chunk, parse_dates)
+        except BaseException:
+            # A partial parquet file would be read back as a complete table on
+            # the next run, silently shortening the cohort.
+            if writer is not None:
+                writer.close()
+                writer = None
+            if cached is not None:
+                cached.unlink(missing_ok=True)
+            raise
+        finally:
+            if writer is not None:
+                writer.close()
+
+    # -- the local copy ----------------------------------------------------
+
+    def _cache_path(self, name: str) -> Path | None:
+        """Where ``name`` is cached, or ``None`` when caching is off.
+
+        The first call validates the directory against the snapshot it was
+        built from. A cache written from a different snapshot describes
+        different rows, and reading it while reporting this snapshot's hash
+        would produce a cohort that reproduces from neither.
+        """
+        if self.cache_dir is None:
+            return None
+        self._ensure_cache_matches_snapshot()
+        return self.cache_dir / f"{name}.parquet"
+
+    def _ensure_cache_matches_snapshot(self) -> None:
+        assert self.cache_dir is not None
+        stamp = self.cache_dir / "_snapshot.json"
+        snapshot = self.snapshot_hash()
+        if not stamp.is_file():
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            stamp.write_text(
+                json.dumps({"source_snapshot_hash": snapshot}, indent=2), encoding="utf-8"
+            )
+            return
+        try:
+            recorded = json.loads(stamp.read_text(encoding="utf-8")).get("source_snapshot_hash")
+        except (OSError, json.JSONDecodeError) as exc:
+            raise MimicBigQueryError(f"Cannot read {stamp}: {exc}") from exc
+        if recorded != snapshot:
+            raise MimicBigQueryError(
+                f"The cache in {self.cache_dir} was downloaded from a different snapshot of "
+                f"physionet-data.\n  cache:  {recorded}\n  now:    {snapshot}\n"
+                "A table has been rewritten since, so the two describe different rows. Delete "
+                "the cache directory to download again, or point --bq-cache-dir somewhere else. "
+                "A cohort selected across the two would reproduce from neither."
+            )
+
+    def _write_cache(self, path: Path, frame: pd.DataFrame) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial = path.with_suffix(".parquet.partial")
+        frame.to_parquet(partial, index=False)
+        partial.replace(path)
+
+    def _append_cache(self, writer: Any, path: Path, chunk: pd.DataFrame) -> Any:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        table = pa.Table.from_pandas(chunk, preserve_index=False)
+        if writer is None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            writer = pq.ParquetWriter(path, table.schema)
+        writer.write_table(table)
+        return writer
+
+    def _iter_cache(
+        self, path: Path, parse_dates: Sequence[str], chunk_rows: int
+    ) -> Iterator[pd.DataFrame]:
+        import pyarrow.parquet as pq
+
+        reader = pq.ParquetFile(path)
+        for batch in reader.iter_batches(batch_size=chunk_rows):
+            yield _typed(batch.to_pandas(), parse_dates)
 
     # -- the query ---------------------------------------------------------
 

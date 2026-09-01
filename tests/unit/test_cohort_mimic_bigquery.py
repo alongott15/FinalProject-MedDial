@@ -427,3 +427,65 @@ def test_naming_no_source_at_all_names_both_ways_in(
 
     with pytest.raises(SystemExit, match="--bigquery"):
         cohort_main(["--out", str(tmp_path / "out")])
+
+
+# -- the local copy ---------------------------------------------------------
+
+
+def test_a_cache_answers_the_second_read_without_querying(extract: Path, tmp_path: Path) -> None:
+    """meddial-cohort and meddial-scr each read all six tables.
+
+    Without a cache the scan is paid twice, and BigQuery bills the reader.
+    """
+    cache = tmp_path / "cache"
+
+    first = _source(extract, cache_dir=cache)
+    records = list(first.admission_records())
+    queries_to_fill_it = len(first._client.queries)
+    assert queries_to_fill_it > 0
+
+    second = _source(extract, cache_dir=cache)
+    assert list(second.admission_records()) == records
+    assert second._client.queries == [], "a filled cache must not re-query BigQuery"
+
+
+def test_the_cache_yields_exactly_what_bigquery_yielded(extract: Path, tmp_path: Path) -> None:
+    """Round-tripping through parquet must not change a candidate."""
+    direct = list(_source(extract).admission_records())
+
+    cache = tmp_path / "cache"
+    list(_source(extract, cache_dir=cache).admission_records())
+    from_cache = list(_source(extract, cache_dir=cache).admission_records())
+
+    assert from_cache == direct
+
+
+def test_a_cached_run_keeps_the_bigquery_snapshot(extract: Path, tmp_path: Path) -> None:
+    """The cohort is salted with the warehouse's hash, not the local copy's.
+
+    Hashing the downloaded bytes instead would make the cohort a property of
+    one machine's dump: re-download, and the same seed draws a different sample.
+    """
+    cache = tmp_path / "cache"
+    source = _source(extract, cache_dir=cache)
+    list(source.admission_records())
+
+    assert source.snapshot_hash().startswith("bigquery-sha256:")
+    assert source.snapshot_hash() == _source(extract).snapshot_hash()
+    stamp = json.loads((cache / "_snapshot.json").read_text(encoding="utf-8"))
+    assert stamp["source_snapshot_hash"] == source.snapshot_hash()
+
+
+def test_a_cache_from_another_snapshot_is_refused(extract: Path, tmp_path: Path) -> None:
+    """A rewritten table means the cache and the warehouse describe different rows."""
+    cache = tmp_path / "cache"
+    list(_source(extract, cache_dir=cache).admission_records())
+
+    moved_on = MimicBigQuerySource(
+        "my-billing-project",
+        client=FakeBigQueryClient(extract, modified=datetime(2025, 6, 7, 8, 9, tzinfo=timezone.utc)),
+        cache_dir=cache,
+    )
+
+    with pytest.raises(MimicBigQueryError, match="different snapshot"):
+        list(moved_on.admission_records())

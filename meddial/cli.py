@@ -147,6 +147,19 @@ def _add_source_arguments(parser: argparse.ArgumentParser) -> None:
         default=DEFAULT_MAX_GIB_BILLED,
         help=f"refuse a query scanning more than this many GiB [{DEFAULT_MAX_GIB_BILLED}]",
     )
+    parser.add_argument(
+        "--bq-cache-dir",
+        type=Path,
+        default=None,
+        help=(
+            "download each BigQuery table here once and read it locally afterwards. "
+            "meddial-cohort and meddial-scr each read the six tables, so without this "
+            "the scan is paid twice. The cohort is still salted with the BigQuery "
+            "snapshot, so it reproduces on any machine, and the cache is refused if "
+            "the warehouse changed since it was written. Restricted data: keep it "
+            "outside the repository."
+        ),
+    )
 
 
 def _open_source(args: argparse.Namespace) -> MimicSource:
@@ -177,6 +190,7 @@ def _open_source(args: argparse.Namespace) -> MimicSource:
                 clinical_dataset=args.bq_clinical_dataset,
                 notes_dataset=args.bq_notes_dataset,
                 max_gib_billed=args.bq_max_gib,
+                cache_dir=args.bq_cache_dir,
             )
         except MimicBigQueryError as exc:
             raise SystemExit(f"Source error: {exc}") from exc
@@ -206,6 +220,10 @@ def _source_flags(args: argparse.Namespace) -> str:
         flags = "--bigquery"
         if args.bq_project:
             flags += f" --bq-project {args.bq_project}"
+        if args.bq_cache_dir:
+            # Naming it here is what stops the second command re-downloading
+            # the six tables the first one just paid for.
+            flags += f" --bq-cache-dir {args.bq_cache_dir}"
         return flags
     return f"--csv-dir {args.csv_dir}"
 
