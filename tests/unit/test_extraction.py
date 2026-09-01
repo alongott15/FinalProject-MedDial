@@ -66,6 +66,41 @@ def test_an_unparseable_answer_raises_instead_of_an_empty_reference() -> None:
         extract_gtmf(NOTE, provider, note_id="s1")
 
 
+def test_a_balanced_but_malformed_answer_raises_too() -> None:
+    """The failure that produced empty references in a real run.
+
+    ``{ truncated`` never balances, so it was refused. A response that *does*
+    balance but does not parse -- a missing comma, an unescaped quote, what a
+    small model emits constantly -- was answered with a fabricated skeleton:
+    right keys, empty lists. That is truthy, so the refusal never fired and the
+    note was written as a reference with nothing in it.
+    """
+    provider = MockProvider(['{"Core_Fields": {"Symptoms": [{"a": "b" "c": "d"}]}}'])
+
+    with pytest.raises(ExtractionError, match="parseable"):
+        extract_gtmf(NOTE, provider, note_id="s1")
+
+
+def test_an_empty_but_parseable_extraction_is_reported(caplog) -> None:
+    """It parsed, so it is not an ExtractionError -- but it must not pass quietly.
+
+    An all-empty core is indistinguishable from a sparse case once written, so
+    the case that produced it is named while the run is still in front of you.
+    """
+    payload = {
+        "Core_Fields": {"Symptoms": [], "Diagnoses": [], "Treatment_Options": []},
+        "Context_Fields": {},
+    }
+    provider = MockProvider([json.dumps(payload)])
+
+    with caplog.at_level("WARNING"):
+        reference = extract_gtmf(NOTE, provider, note_id="case-7")
+
+    assert reference.core.symptoms == []
+    assert "case-7" in caplog.text
+    assert "no symptoms, diagnoses or treatments" in caplog.text
+
+
 def test_the_refusal_names_the_note_and_the_usual_cause() -> None:
     """The operator needs to know which note, and what to change."""
     provider = MockProvider(["{ truncated"])

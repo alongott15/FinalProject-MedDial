@@ -110,6 +110,25 @@ def aggressive_json_clean(text: str) -> str:
     return text.strip()
 
 def safe_json_parse_object(json_str: str, field_name: str = "") -> dict:
+    """Parse one JSON object, or return ``{}`` so the caller can refuse it.
+
+    This used to answer an unparseable response with a fully-formed skeleton --
+    the right keys, every list empty, every string "not provided". That defeated
+    the one check standing between a failed extraction and a written profile:
+    :func:`_first_json_object` raises only ``if not data``, and a skeleton is
+    truthy. A note the model garbled therefore produced a reference with no
+    symptoms, no diagnoses and no treatments, no error anywhere, and a file on
+    disk that nothing downstream can tell from a genuinely sparse case (D-08).
+
+    Returning ``{}`` restores the refusal. A response that could not be parsed
+    is not a note without content.
+
+    The repair pass still balances braces and drops trailing commas, and no
+    longer tries to escape quotes. That substitution repaired nothing: it
+    rewrote every ``"`` not followed by a delimiter, which turned valid JSON
+    into invalid JSON, and it ran first, so it also destroyed the trailing-comma
+    repair that did work.
+    """
     if not json_str or json_str.strip() in ['', '{}']:
         return {}
 
@@ -125,40 +144,20 @@ def safe_json_parse_object(json_str: str, field_name: str = "") -> dict:
                 cleaned = '{' + cleaned
             if not cleaned.endswith('}'):
                 cleaned = cleaned + '}'
-            cleaned = re.sub(r'(?<!\\)"(?=[^",\]\}]*")', '\\"', cleaned)
             cleaned = re.sub(r',(\s*[}\]])', r'\1', cleaned)
             result = json.loads(cleaned)
             if isinstance(result, dict):
                 return result
-        except Exception:
+        except json.JSONDecodeError:
             pass
 
-        return {
-            "Core_Fields": {
-                "Symptoms": [],
-                "Diagnoses": [],
-                "Treatment_Options": []
-            },
-            "Context_Fields": {
-                "Patient_Demographics": {
-                    "Date_of_Birth": "not provided",
-                    "Age": 0,
-                    "Sex": "not provided",
-                    "Religion": "not provided",
-                    "Marital_Status": "not provided",
-                    "Ethnicity": "not provided",
-                    "Insurance": "not provided",
-                    "Admission_Type": "not provided",
-                    "Admission_Date": "not provided",
-                    "Discharge_Date": "not provided"
-                },
-                "Medical_History": {"Past_Medical_History": "not provided"},
-                "Allergies": [],
-                "Current_Medications": [],
-                "Discharge_Medications": []
-            },
-            "Additional_Context": {"Chief_Complaint": "not provided"}
-        }
+        logger.error(
+            "Could not parse the extraction%s. First 300 characters of the "
+            "response: %s",
+            f" for {field_name}" if field_name else "",
+            json_str[:300],
+        )
+        return {}
 
 def provider_from_env(prefix: str = "MEDDIAL_GTMF") -> LLMProvider:
     """Build a local provider from ``{prefix}_BASE_URL`` / ``{prefix}_MODEL``.
@@ -318,6 +317,20 @@ def extract_gtmf(
             "Extracted %d entity/entities without resolvable evidence: %s",
             len(unevidenced),
             ", ".join(unevidenced),
+        )
+    if not (reference.core.symptoms or reference.core.diagnoses or reference.core.treatments):
+        # Parseable, so not an ExtractionError -- the model did answer. But a
+        # discharge summary with no symptom, no diagnosis and no treatment is
+        # very nearly always the model having answered the wrong question, and
+        # it is the one result that looks identical to a sparse case once it is
+        # written (D-08). Say so per case rather than leaving it to be noticed
+        # in aggregate.
+        logger.warning(
+            "Note %r extracted no symptoms, diagnoses or treatments from %d characters. "
+            "The response parsed, so the model answered; check that it answered with the "
+            "schema. A model too small for structured extraction is the usual cause.",
+            note_id,
+            len(medical_text),
         )
     return reference
 
