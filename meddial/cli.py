@@ -50,6 +50,7 @@ from meddial.cohort import (
     DEFAULT_COHORT_SIZE,
     DEFAULT_SAMPLING_SEED,
     CohortSelectionError,
+    InsufficientEligibleCasesError,
 )
 from meddial.cohort.mimic_bigquery import (
     DEFAULT_CLINICAL_DATASET,
@@ -289,6 +290,23 @@ def _cohort_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _print_exclusion_flow(stages: Any) -> None:
+    """Print the CONSORT-style flow from manifest rows or ``StageCount``s.
+
+    The same flow is worth printing on both paths. On success it is the
+    reported result; on a shortage it is the diagnosis, and it is the reason
+    the shortage is legible at all.
+    """
+    print("Exclusion flow:")
+    for stage in stages:
+        row = stage if isinstance(stage, dict) else stage.to_dict()
+        label = row.get("label", row.get("criterion", "?"))
+        print(
+            f"  {row.get('criterion', ''):>4}  {label}: "
+            f"-{row.get('excluded', 0)} ({row.get('remaining', 0)} left)"
+        )
+
+
 def cohort_main(argv: list[str] | None = None) -> int:
     from meddial.cohort import create_private_manifest, select_cohort
 
@@ -309,6 +327,25 @@ def cohort_main(argv: list[str] | None = None) -> int:
         selection = select_cohort(
             records, source_snapshot_hash=snapshot, n_cases=args.n, seed=args.seed
         )
+    except InsufficientEligibleCasesError as exc:
+        # The flow is the diagnosis. Printing only the shortfall would leave the
+        # operator guessing between "ask for fewer" and "this is not the extract
+        # you meant", which are answered by opposite actions.
+        print()
+        _print_exclusion_flow(exc.stage_counts)
+        if exc.malformed_count:
+            print(f"\nUnevaluable candidates (excluded, reported): {exc.malformed_count}")
+        print()
+        raise SystemExit(
+            f"Selection refused: {exc}.\n\n"
+            f"Candidates read: {exc.candidate_pool_size}. Eligible after E1-E10 and "
+            f"one-admission-per-subject: {exc.available}.\n"
+            "The flow above says which criterion removed how many. Full MIMIC-III "
+            "holds roughly 58,900 admissions; a candidate count far below that is a "
+            "demo or a subset, not a strict cohort, and the answer is a wider extract "
+            f"rather than a smaller --n. Otherwise re-run with --n {exc.available} or "
+            "less."
+        ) from exc
     except CohortSelectionError as exc:
         raise SystemExit(f"Selection refused: {exc}") from exc
 
@@ -320,10 +357,7 @@ def cohort_main(argv: list[str] | None = None) -> int:
     )
 
     print()
-    print("Exclusion flow:")
-    for stage in manifest.get("exclusion_flow", []):
-        label = stage.get("label", stage.get("criterion", "?"))
-        print(f"  {stage.get('criterion', ''):>4}  {label}: -{stage.get('excluded', 0)}")
+    _print_exclusion_flow(manifest.get("exclusion_flow", []))
     if selection.malformed:
         print()
         print(f"Unevaluable candidates (excluded, reported): {len(selection.malformed)}")

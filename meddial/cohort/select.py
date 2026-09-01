@@ -36,11 +36,32 @@ class DuplicateAdmissionError(CohortSelectionError):
 
 
 class InsufficientEligibleCasesError(CohortSelectionError):
-    """The exclusions leave fewer cases than the requested powered cohort."""
+    """The exclusions leave fewer cases than the requested powered cohort.
 
-    def __init__(self, requested: int, available: int) -> None:
+    Carries the exclusion flow that produced the shortage. That flow is already
+    computed by the time this is raised, and discarding it costs the operator
+    the one thing that separates the two situations a shortage can mean: a
+    request for more cases than this extract can support, which is answered by
+    lowering ``n_cases``, and an extract that is not what it was taken to be --
+    a subset, a demo, a mis-mapped column -- which is not. A bare shortfall
+    number cannot tell those apart. A flow showing which criterion removed how
+    many can.
+    """
+
+    def __init__(
+        self,
+        requested: int,
+        available: int,
+        *,
+        stage_counts: tuple[StageCount, ...] = (),
+        candidate_pool_size: int = 0,
+        malformed_count: int = 0,
+    ) -> None:
         self.requested = requested
         self.available = available
+        self.stage_counts = stage_counts
+        self.candidate_pool_size = candidate_pool_size
+        self.malformed_count = malformed_count
         super().__init__(f"requested exactly {requested} cases, but only {available} are eligible")
 
 
@@ -197,7 +218,13 @@ def select_cohort(
         key=lambda item: item.record.identity,
     )
     if len(eligible) < n_cases:
-        raise InsufficientEligibleCasesError(n_cases, len(eligible))
+        raise InsufficientEligibleCasesError(
+            n_cases,
+            len(eligible),
+            stage_counts=stage_counts,
+            candidate_pool_size=len(candidates),
+            malformed_count=len(malformed),
+        )
 
     ranked = sorted(
         eligible,

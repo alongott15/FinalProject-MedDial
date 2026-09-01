@@ -239,6 +239,40 @@ def test_exact_sample_size_and_insufficient_pool_fail_closed() -> None:
         )
 
 
+def test_a_shortage_reports_the_flow_that_caused_it() -> None:
+    """A shortfall count alone cannot be acted on; the flow can.
+
+    Too few eligible cases means either "ask for fewer" or "this extract is not
+    the one you meant", and those have opposite answers. The flow is already
+    computed when the shortage is detected, so it travels with the error rather
+    than being recomputed or lost.
+    """
+    candidates = [
+        _candidate(1, 101),
+        _candidate(2, 201, died=True),
+        _candidate(3, 301, los_days=8),
+    ]
+
+    with pytest.raises(InsufficientEligibleCasesError) as caught:
+        select_cohort(
+            candidates,
+            source_snapshot_hash="snapshot-a",
+            n_cases=3,
+            seed=3,
+        )
+
+    error = caught.value
+    assert error.requested == 3
+    assert error.available == 1
+    assert error.candidate_pool_size == 3
+    assert error.malformed_count == 0
+
+    excluded_by = {stage.criterion: stage.excluded for stage in error.stage_counts}
+    assert excluded_by[CriterionCode.IN_HOSPITAL_DEATH] == 1
+    assert excluded_by[CriterionCode.LENGTH_OF_STAY] == 1
+    assert sum(excluded_by.values()) == len(candidates) - error.available
+
+
 def test_per_case_audit_and_sequential_stage_counts() -> None:
     multi_excluded = _candidate(1, 101, icu=True, died=True)
     long_stay = _candidate(2, 201, los_days=8)
