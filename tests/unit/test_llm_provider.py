@@ -296,6 +296,34 @@ def test_the_fallback_matches_the_tag_exactly(monkeypatch) -> None:
         resolve_ollama_digest("http://localhost:11434/v1", "qwen3.5:9b")
 
 
+def test_an_untagged_name_resolves_against_latest(monkeypatch) -> None:
+    """``ollama create mymodel`` is listed as ``mymodel:latest``.
+
+    Serving a note-sized context needs a locally derived model, and those are
+    created without an explicit tag. Asking for one by the name it was created
+    under matched nothing, and a missing digest stops the run.
+    """
+    _stub_ollama(
+        monkeypatch,
+        show={"details": {}},
+        tags={"models": [{"name": "meddial-extractor:latest", "digest": DIGEST}]},
+    )
+
+    assert resolve_ollama_digest("http://localhost:11434/v1", "meddial-extractor") == DIGEST
+
+
+def test_latest_does_not_match_a_differently_tagged_build(monkeypatch) -> None:
+    """The implicit tag is Ollama's rule, not a licence to match loosely."""
+    _stub_ollama(
+        monkeypatch,
+        show={"details": {}},
+        tags={"models": [{"name": "meddial-extractor:16k", "digest": "other"}]},
+    )
+
+    with pytest.raises(ProviderConfigurationError, match="no digest"):
+        resolve_ollama_digest("http://localhost:11434/v1", "meddial-extractor")
+
+
 def test_a_run_cannot_start_against_unidentifiable_weights(monkeypatch) -> None:
     """EXP-7: a number whose weights cannot be named is not reproducible."""
     _stub_ollama(monkeypatch, show={"details": {}}, tags={"models": []})

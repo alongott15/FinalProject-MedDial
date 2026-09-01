@@ -101,6 +101,19 @@ def resolve_ollama_digest(base_url: str, model_id: str, *, timeout_s: float = 30
     return str(digest)
 
 
+def _with_implicit_tag(name: str) -> str:
+    """``mymodel`` -> ``mymodel:latest``; an explicit tag is left alone.
+
+    Ollama's own naming rule, not a loosening of the match below. A model
+    created locally -- ``ollama create meddial-extractor`` -- is listed as
+    ``meddial-extractor:latest``, so asking for it by the name it was created
+    under matched nothing and the run stopped with "no digest ... cannot record
+    provenance". Pulled tags never showed this because they always carry an
+    explicit tag.
+    """
+    return name if ":" in name else f"{name}:latest"
+
+
 def _digest_from_tags(root: str, model_id: str, *, timeout_s: float) -> str | None:
     """Look the digest up in the model list. ``None`` when the server has no answer."""
     tags_url = f"{root}/api/tags"
@@ -113,10 +126,17 @@ def _digest_from_tags(root: str, model_id: str, *, timeout_s: float) -> str | No
             f"Could not resolve a weight digest for {model_id!r} from {tags_url}: {exc}"
         ) from exc
 
+    wanted = _with_implicit_tag(model_id)
     for entry in models:
-        # Match the tag exactly. ``qwen3.5:9b`` and ``qwen3.5:4b`` are
-        # different weights, and picking the wrong one mislabels every score.
-        if entry.get("name") == model_id or entry.get("model") == model_id:
+        # Match the tag exactly, once both sides are written the same way.
+        # ``qwen3.5:9b`` and ``qwen3.5:4b`` are different weights, and picking
+        # the wrong one mislabels every score.
+        names = {
+            _with_implicit_tag(str(value))
+            for key in ("name", "model")
+            if (value := entry.get(key)) is not None
+        }
+        if wanted in names:
             return entry.get("digest") or None
     return None
 
