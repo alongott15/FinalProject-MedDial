@@ -1,7 +1,7 @@
 """Console entry points, declared in ``[project.scripts]``.
 
 ``meddial-cohort``
-    Apply E1-E10 to a MIMIC-III CSV extract and write the auditable private
+    Apply E1-E10 to a MIMIC-III extract and write the auditable private
     manifest: the selected cases, the exclusion flow, and the hashes that make
     the selection reproducible.
 
@@ -22,12 +22,19 @@
 The order is fixed and each step consumes the previous one's output:
 ``meddial-cohort`` -> ``meddial-scr`` -> ``meddial-run`` -> ``meddial-tables``.
 
+``meddial-cohort`` and ``meddial-scr`` read MIMIC-III either from a CSV
+directory (``--csv-dir``) or from ``physionet-data`` on BigQuery
+(``--bigquery``), which is what lets the pipeline run in a hosted GPU runtime
+that cannot hold the CSV distribution. The two backends select identically but
+hash differently, so a cohort and its references must come from the same one.
+
 Both inherit the constraints that shape ``scripts/run_e0.py``. **Decision D2 /
 GOV-3:** generation and scoring send MIMIC-derived text to a model, so only a
 local provider is offered and there is no flag that routes a case to a hosted
-API. **Constraint C2:** everything these commands write is derived from
-restricted data, so the output directory must sit outside the repository
-unless the operator overrides that deliberately.
+API -- a rule about where notes are *sent*, which reading MIMIC-III from its
+credentialed archive does not touch. **Constraint C2:** everything these
+commands write is derived from restricted data, so the output directory must
+sit outside the repository unless the operator overrides that deliberately.
 """
 
 from __future__ import annotations
@@ -44,6 +51,12 @@ from meddial.cohort import (
     DEFAULT_SAMPLING_SEED,
     CohortSelectionError,
 )
+from meddial.cohort.mimic_bigquery import (
+    DEFAULT_CLINICAL_DATASET,
+    DEFAULT_MAX_GIB_BILLED,
+    DEFAULT_NOTES_DATASET,
+)
+from meddial.cohort.mimic_source import MimicSource
 from meddial.experiments import (
     ExperimentRunner,
     MedDialBackend,
@@ -75,31 +88,125 @@ slow run, it is a stalled one.
 
 
 MIMIC_CSV_DIR_ENV = "MIMIC_CSV_DIR"
+MIMIC_BIGQUERY_PROJECT_ENV = "MIMIC_BIGQUERY_PROJECT"
 
 
-def _resolve_csv_dir(explicit: Path | None) -> Path:
-    """``--csv-dir`` if given, else ``MIMIC_CSV_DIR`` from the environment/.env.
-
-    The extract lives outside the repository under C2, so its path is a
-    per-machine setting rather than something to retype on every command.
-    An explicit flag always wins, so a second extract can be pointed at
-    without editing the environment.
-    """
-    if explicit is not None:
-        return explicit
+def _load_env() -> None:
     try:
         from dotenv import load_dotenv
 
         load_dotenv()
     except ImportError:  # python-dotenv is a declared dependency; tolerate absence
         pass
-    value = os.environ.get(MIMIC_CSV_DIR_ENV)
-    if not value:
+
+
+def _add_source_arguments(parser: argparse.ArgumentParser) -> None:
+    """Where MIMIC-III is read from: a CSV directory, or BigQuery.
+
+    Both backends produce the same candidates and the same exclusion flow --
+    they share :class:`~meddial.cohort.mimic_source.MimicSource` -- but not the
+    same snapshot hash, because one identifies bytes on disk and the other
+    identifies tables in a warehouse. Sampling is salted with that hash, so the
+    same seed draws a different sample from each. Select a cohort and extract
+    its references from the same backend; ``meddial-scr`` refuses the mixture.
+    """
+    parser.add_argument(
+        "--csv-dir",
+        type=Path,
+        default=None,
+        help=f"MIMIC-III CSV directory [${MIMIC_CSV_DIR_ENV}]",
+    )
+    parser.add_argument(
+        "--bigquery",
+        action="store_true",
+        help=(
+            "read MIMIC-III from BigQuery (physionet-data) instead of local CSVs. "
+            "Requires PhysioNet credentialing linked to a Google account, and a "
+            "billing project of your own -- BigQuery bills the reader."
+        ),
+    )
+    parser.add_argument(
+        "--bq-project",
+        default=None,
+        help=f"Google Cloud project billed for the queries [${MIMIC_BIGQUERY_PROJECT_ENV}]",
+    )
+    parser.add_argument(
+        "--bq-clinical-dataset",
+        default=DEFAULT_CLINICAL_DATASET,
+        help=f"structured tables [{DEFAULT_CLINICAL_DATASET}]",
+    )
+    parser.add_argument(
+        "--bq-notes-dataset",
+        default=DEFAULT_NOTES_DATASET,
+        help=f"NOTEEVENTS [{DEFAULT_NOTES_DATASET}]",
+    )
+    parser.add_argument(
+        "--bq-max-gib",
+        type=float,
+        default=DEFAULT_MAX_GIB_BILLED,
+        help=f"refuse a query scanning more than this many GiB [{DEFAULT_MAX_GIB_BILLED}]",
+    )
+
+
+def _open_source(args: argparse.Namespace) -> MimicSource:
+    """The MIMIC-III source these flags name, opened and validated.
+
+    Every caller downstream holds it as a
+    :class:`~meddial.cohort.mimic_source.MimicSource` and cannot tell which
+    backend it got, which is the point: the cohort must not depend on where the
+    extract was stored.
+    """
+    from meddial.cohort.mimic_csv import MimicCsvError, MimicCsvSource
+
+    _load_env()
+    if args.bigquery:
+        from meddial.cohort.mimic_bigquery import MimicBigQueryError, MimicBigQuerySource
+
+        project = args.bq_project or os.environ.get(MIMIC_BIGQUERY_PROJECT_ENV)
+        if not project:
+            raise SystemExit(
+                "No BigQuery billing project: pass --bq-project, or set "
+                f"{MIMIC_BIGQUERY_PROJECT_ENV} in the environment or a .env file. "
+                "BigQuery bills the project that runs the query, so there is no default."
+            )
+        args.bq_project = project
+        try:
+            return MimicBigQuerySource(
+                project,
+                clinical_dataset=args.bq_clinical_dataset,
+                notes_dataset=args.bq_notes_dataset,
+                max_gib_billed=args.bq_max_gib,
+            )
+        except MimicBigQueryError as exc:
+            raise SystemExit(f"Source error: {exc}") from exc
+
+    # The extract lives outside the repository under C2, so its path is a
+    # per-machine setting rather than something to retype on every command. An
+    # explicit flag always wins, so a second extract can be pointed at without
+    # editing the environment.
+    from_env = os.environ.get(MIMIC_CSV_DIR_ENV)
+    csv_dir = args.csv_dir or (Path(from_env) if from_env else None)
+    if csv_dir is None:
         raise SystemExit(
-            f"No MIMIC-III CSV directory: pass --csv-dir, or set {MIMIC_CSV_DIR_ENV} "
-            "in the environment or a .env file."
+            f"No MIMIC-III source: pass --csv-dir, set {MIMIC_CSV_DIR_ENV} in the "
+            "environment or a .env file, or pass --bigquery to read from "
+            "physionet-data on BigQuery."
         )
-    return Path(value)
+    args.csv_dir = csv_dir
+    try:
+        return MimicCsvSource(csv_dir)
+    except MimicCsvError as exc:
+        raise SystemExit(f"Source error: {exc}") from exc
+
+
+def _source_flags(args: argparse.Namespace) -> str:
+    """The flags that would reopen this same source, for a printed next step."""
+    if args.bigquery:
+        flags = "--bigquery"
+        if args.bq_project:
+            flags += f" --bq-project {args.bq_project}"
+        return flags
+    return f"--csv-dir {args.csv_dir}"
 
 
 def check_output_location(out: Path, *, allowed: bool) -> None:
@@ -167,15 +274,10 @@ def _read_cases(path: Path) -> list[dict[str, Any]]:
 def _cohort_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="meddial-cohort",
-        description="Apply E1-E10 to a MIMIC-III CSV extract and write the private manifest.",
+        description="Apply E1-E10 to a MIMIC-III extract and write the private manifest.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument(
-        "--csv-dir",
-        type=Path,
-        default=None,
-        help=f"MIMIC-III CSV directory [${MIMIC_CSV_DIR_ENV}]",
-    )
+    _add_source_arguments(parser)
     parser.add_argument("--out", type=Path, required=True, help="output directory, outside the repo")
     parser.add_argument("--n", type=int, default=DEFAULT_COHORT_SIZE, help="cases to select")
     parser.add_argument("--seed", type=int, default=DEFAULT_SAMPLING_SEED, help="sampling seed")
@@ -189,18 +291,13 @@ def _cohort_parser() -> argparse.ArgumentParser:
 
 def cohort_main(argv: list[str] | None = None) -> int:
     from meddial.cohort import create_private_manifest, select_cohort
-    from meddial.cohort.mimic_csv import MimicCsvError, MimicCsvSource
 
     args = _cohort_parser().parse_args(argv)
-    args.csv_dir = _resolve_csv_dir(args.csv_dir)
     check_output_location(args.out, allowed=args.allow_in_repo)
 
-    try:
-        source = MimicCsvSource(args.csv_dir)
-    except MimicCsvError as exc:
-        raise SystemExit(f"Source error: {exc}") from exc
+    source = _open_source(args)
 
-    print("Hashing the source extract (once; NOTEEVENTS is large)...")
+    print("Identifying the source extract (once; NOTEEVENTS is large)...")
     snapshot = source.snapshot_hash()
     print(f"Source snapshot: {snapshot}")
 
@@ -241,7 +338,7 @@ def cohort_main(argv: list[str] | None = None) -> int:
     print(f"Selected:      {len(selection.selected)}")
     print(f"Cohort hash:   {selection.cohort_hash}")
     print(f"Wrote {manifest_path}")
-    print(f"Next: meddial-scr --csv-dir {args.csv_dir} --cohort {manifest_path} --out <dir>")
+    print(f"Next: meddial-scr {_source_flags(args)} --cohort {manifest_path} --out <dir>")
     return 0
 
 
@@ -256,12 +353,7 @@ def _scr_parser() -> argparse.ArgumentParser:
         description="Extract a Structured Clinical Reference per admission in a cohort manifest.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument(
-        "--csv-dir",
-        type=Path,
-        default=None,
-        help=f"MIMIC-III CSV directory [${MIMIC_CSV_DIR_ENV}]",
-    )
+    _add_source_arguments(parser)
     parser.add_argument(
         "--cohort", type=Path, required=True, help="cohort_private_manifest.json"
     )
@@ -312,12 +404,10 @@ def _scr_parser() -> argparse.ArgumentParser:
 
 def scr_main(argv: list[str] | None = None) -> int:
     from gtmf_creation import extract_gtmf
-    from meddial.cohort.mimic_csv import MimicCsvError, MimicCsvSource
     from meddial.knowledge import Demographics
     from Utils.markdown_gtmf import save_gtmf_markdown
 
     args = _scr_parser().parse_args(argv)
-    args.csv_dir = _resolve_csv_dir(args.csv_dir)
     check_output_location(args.out, allowed=args.allow_in_repo)
     if args.reasoning_effort == "default":
         args.reasoning_effort = None
@@ -332,19 +422,18 @@ def scr_main(argv: list[str] | None = None) -> int:
     wanted = {(int(c["subject_id"]), int(c["hadm_id"])) for c in selected}
     print(f"Cohort: {len(wanted)} case(s), cohort_hash={manifest.get('cohort_hash')}")
 
-    try:
-        source = MimicCsvSource(args.csv_dir)
-    except MimicCsvError as exc:
-        raise SystemExit(f"Source error: {exc}") from exc
+    source = _open_source(args)
 
     snapshot = source.snapshot_hash()
     if snapshot != manifest.get("source_snapshot_hash"):
         # Extracting from a different extract than the cohort was selected from
         # would silently break the link between the manifest and the references.
+        # A CSV hash and a BigQuery hash never compare equal, so this also
+        # catches selecting from one backend and extracting from the other.
         raise SystemExit(
-            "Refusing to extract: this CSV extract does not match the one the cohort was "
-            f"selected from.\n  manifest: {manifest.get('source_snapshot_hash')}\n  "
-            f"this dir: {snapshot}"
+            "Refusing to extract: this MIMIC-III source does not match the one the cohort "
+            f"was selected from.\n  manifest: {manifest.get('source_snapshot_hash')}\n  "
+            f"this source: {snapshot}"
         )
 
     try:

@@ -36,6 +36,17 @@ dev = [
   "ruff>=0.8,<1.0",
   "mypy>=1.13,<2.0",
 ]
+# Read MIMIC-III from physionet-data on BigQuery instead of local CSVs
+# (meddial-cohort --bigquery). Optional because the CSV path must keep working
+# on a machine with no cloud account at all. db-dtypes is what lets a BigQuery
+# DATE column arrive as a pandas date rather than an object; bigquery-storage
+# is the fast download path for NOTEEVENTS, the one large table here.
+bigquery = [
+  "google-cloud-bigquery>=3.20,<4.0",
+  "google-cloud-bigquery-storage>=2.24,<3.0",
+  "db-dtypes>=1.2,<2.0",
+  "pyarrow>=14.0",
+]
 
 [tool.setuptools]
 include-package-data = true
