@@ -10,18 +10,15 @@ readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [{ name = "Alon Gottlib" }]
+# What the pipeline itself needs: the models, the config layer, the loopback
+# HTTP client, and the tabular reader. meddial-cohort and meddial-scr import
+# nothing beyond this, which is what lets a hosted runtime install the package
+# without dragging a machine-learning stack in behind it.
 dependencies = [
   "pydantic>=2.8,<3.0",
   "python-dotenv>=1.0,<2.0",
   "httpx>=0.27,<1.0",
   "pandas>=2.0,<3.0",
-  "nltk>=3.8,<4.0",
-  "rouge-score>=0.1.2,<0.2",
-  "scikit-learn>=1.4,<2.0",
-  "sentence-transformers>=2.7,<3.0",
-  "transformers>=4.40,<5.0",
-  "torch>=2.2,<3.0",
-  "deepeval>=3.0,<5.0",
 ]
 
 [project.scripts]
@@ -31,7 +28,26 @@ meddial-run = "meddial.cli:run_main"
 meddial-tables = "meddial.cli:tables_main"
 
 [project.optional-dependencies]
+# The scoring stack: the DeepEval judge and the discriminability benchmark.
+# Separated from the core because cohort selection and reference extraction
+# import none of it, and installing it is not free -- it is several gigabytes,
+# and on a hosted runtime it fights the packages that are already there. A
+# Colab image ships huggingface-hub 1.x for its own gradio and diffusers; an
+# upper bound here that forces transformers 4.x drags the hub back to 0.x and
+# breaks both. So the bounds are only the ones a released version of this
+# project has actually been run against: transformers 5.x and
+# sentence-transformers 5.x are what the development machine runs today.
+eval = [
+  "nltk>=3.8,<4.0",
+  "rouge-score>=0.1.2,<0.2",
+  "scikit-learn>=1.4,<2.0",
+  "sentence-transformers>=2.7",
+  "transformers>=4.40",
+  "torch>=2.2,<3.0",
+  "deepeval>=3.0,<5.0",
+]
 dev = [
+  "meddial[eval]",
   "pytest>=8.3,<9.0",
   "ruff>=0.8,<1.0",
   "mypy>=1.13,<2.0",

@@ -90,9 +90,22 @@ pip install -e ".[dev]"
 that instead with `uv sync --extra dev` when reproducing a run rather than
 developing.
 
-Install `".[bigquery]"` as well to read MIMIC-III from BigQuery rather than
-from local CSV files. It is an optional extra so that the CSV path keeps
-working on a machine with no cloud account at all.
+The core install is deliberately thin — Pydantic, dotenv, httpx, pandas — and
+three extras sit on top of it:
+
+| Extra | What it adds | When you need it |
+| --- | --- | --- |
+| `eval` | DeepEval, torch, transformers, scikit-learn, NLTK, rouge-score | `meddial-run`, `meddial-tables`, the judge, the benchmarks |
+| `bigquery` | the BigQuery client, `db-dtypes`, `pyarrow` | `--bigquery` on `meddial-cohort` / `meddial-scr` |
+| `dev` | pytest, ruff, mypy, and `eval` | working on the project |
+
+`meddial-cohort` and `meddial-scr` import none of the `eval` stack, which is
+what lets a hosted runtime install this package in seconds rather than pulling
+several gigabytes of machine learning behind it. That separation also keeps the
+install out of a fight it cannot win: a Colab image ships `huggingface-hub` 1.x
+for its own `gradio` and `diffusers`, and a core dependency forcing
+`transformers` 4.x would drag the hub back to 0.x and break both. Install
+`".[eval]"` when you get to scoring.
 
 ## Model providers
 
