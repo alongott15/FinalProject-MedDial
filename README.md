@@ -90,6 +90,10 @@ pip install -e ".[dev]"
 that instead with `uv sync --extra dev` when reproducing a run rather than
 developing.
 
+Install `".[bigquery]"` as well to read MIMIC-III from BigQuery rather than
+from local CSV files. It is an optional extra so that the CSV path keeps
+working on a machine with no cloud account at all.
+
 ## Model providers
 
 Generation runs against a locally served OpenAI-compatible endpoint (Ollama
@@ -226,8 +230,9 @@ regeneration, and the manuscript framing is a decision for after all four.
 ## Building the cohort and the references
 
 The pipeline is four commands, each consuming the previous one's output. It
-starts from a MIMIC-III CSV extract containing `ADMISSIONS`, `PATIENTS`,
-`NOTEEVENTS`, `ICUSTAYS`, `PROCEDURES_ICD` and `DIAGNOSES_ICD`.
+starts from MIMIC-III's `ADMISSIONS`, `PATIENTS`, `NOTEEVENTS`, `ICUSTAYS`,
+`PROCEDURES_ICD` and `DIAGNOSES_ICD` tables, read either from a CSV extract or
+from BigQuery.
 
 ```bash
 meddial-cohort \
@@ -258,10 +263,66 @@ already exists is skipped, so an interrupted run continues where it stopped.
 The same `--seed` and the same extract reproduce the same cohort hash. Change
 either and you have a different cohort, which is the point.
 
+### Reading MIMIC-III from BigQuery
+
+PhysioNet publishes MIMIC-III on BigQuery as `physionet-data`. Pass
+`--bigquery` to both commands to read it there instead of from local files:
+
+```bash
+export MIMIC_BIGQUERY_PROJECT=your-gcp-project-id   # BigQuery bills the reader
+
+meddial-cohort --bigquery --out /path/outside/repo/cohort --n 200
+
+meddial-scr --bigquery \
+    --cohort /path/outside/repo/cohort/cohort_private_manifest.json \
+    --out /path/outside/repo/references
+```
+
+It needs PhysioNet credentialing with BigQuery access approved for the same
+Google account, and a Google Cloud project of your own; the six tables cost a
+few GB of scan against the monthly free tier, and `--bq-max-gib` refuses a
+query that would scan more than 64 GiB so a mistyped dataset name fails rather
+than bills. Both backends share one reader
+(`meddial/cohort/mimic_source.py`), so they yield the same candidates and the
+same exclusion flow.
+
+They do not yield the same `source_snapshot_hash`: the CSV backend hashes the
+bytes of the files, and BigQuery hashes each table's id, row count and
+last-modified time, prefixed `bigquery-sha256:`. Sampling is salted with that
+value, so **the same seed draws a different sample from each backend** — a
+cohort is a claim about one identified artefact, not about MIMIC-III in the
+abstract. `meddial-scr` compares the hashes exactly and refuses to extract
+against the backend the cohort did not come from. Pick one and build the whole
+pipeline on it.
+
+This does not touch decision D2 / GOV-3, which governs where MIMIC-derived text
+is *sent*. Reading from BigQuery is the same direction as downloading the CSVs;
+no note goes to a hosted model either way.
+
+### Running it on Colab
+
+`notebooks/meddial_colab.ipynb` runs the cohort and extraction steps on a Colab
+GPU. BigQuery is what makes that possible — the CSV distribution does not fit in
+a hosted runtime — and the GPU is what makes extraction finish, since it is
+bound by how fast a local model reads a discharge summary. The notebook
+installs Ollama into the runtime and serves the extractor on `localhost`, which
+is the only shape of provider the restricted-clinical check accepts, and picks
+the largest extractor tag the attached card's VRAM holds. Its output is
+restricted-derived and a Colab runtime is ephemeral, so it packages the
+directory and leaves the decision of where that archive goes to you.
+
 Note that `gtmf_creation.main()` is withdrawn. It selected cases with
 `is_light_common_case`, a keyword scan over the note body, which the criteria
 forbid and which cannot reproduce by hash. Its extraction internals are
 unchanged and are what `meddial-scr` calls.
+
+`notebooks/gtmf_creation_colab.ipynb` drives those internals directly, for
+looking at extraction rather than running the pipeline. It imports
+`extract_gtmf`, `process_notes` and `is_light_common_case` from the module
+rather than copying them, extracts one note under inspection — unresolved
+evidence spans and unevidenced entities printed per case — and then runs the
+batch. Cases come from a cohort manifest, or, for exploration only, from the
+structured tables in a fixed order; note vocabulary never chooses them.
 
 ## Running an experiment
 
