@@ -489,3 +489,24 @@ def test_a_cache_from_another_snapshot_is_refused(extract: Path, tmp_path: Path)
 
     with pytest.raises(MimicBigQueryError, match="different snapshot"):
         list(moved_on.admission_records())
+
+
+def test_the_documented_placeholder_is_not_a_project(extract: Path) -> None:
+    """It otherwise fails late, and far from its cause.
+
+    Reading table metadata needs no billing project, so the placeholder gets
+    through snapshot_hash() and prints a plausible bigquery-sha256: line. Only
+    the first query fails, as a raw 400 from inside the client library.
+    """
+    with pytest.raises(MimicBigQueryError, match="placeholder"):
+        MimicBigQuerySource("your-gcp-project-id", client=FakeBigQueryClient(extract))
+
+    with pytest.raises(MimicBigQueryError, match="placeholder"):
+        MimicBigQuerySource("<your-project-id>", client=FakeBigQueryClient(extract))
+
+
+def test_a_real_looking_project_is_left_alone(extract: Path) -> None:
+    """The check must not reject a project that merely reads like an example."""
+    source = MimicBigQuerySource("meddial-thesis-2026", client=FakeBigQueryClient(extract))
+
+    assert source.billing_project == "meddial-thesis-2026"

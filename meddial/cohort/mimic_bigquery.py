@@ -60,6 +60,17 @@ This ceiling turns that into a failed query rather than an invoice; raise it
 with ``--bq-max-gib`` if a legitimate read ever exceeds it.
 """
 
+PLACEHOLDER_PROJECTS = frozenset(
+    {
+        "your-gcp-project-id",
+        "your-project-id",
+        "my-project-id",
+        "my-billing-project-id",
+        "project-id",
+    }
+)
+"""Values that are documentation, not projects, and must never reach BigQuery."""
+
 _NOTES_TABLE = "NOTEEVENTS"
 
 _PREDICATES: dict[str, str] = {
@@ -98,6 +109,19 @@ class MimicBigQuerySource(MimicSource):
             raise MimicBigQueryError(
                 "A billing project is required: BigQuery bills the project that runs "
                 "the query, not the one that publishes the data."
+            )
+        if billing_project.strip().strip("<>") in PLACEHOLDER_PROJECTS:
+            # Worth its own check because this one gets a long way in before it
+            # fails. Reading table metadata needs no billing project, so
+            # snapshot_hash() succeeds and prints a plausible
+            # ``bigquery-sha256:`` line; the placeholder only bites at the first
+            # query, as a raw 400 "ProjectId must be non-empty" from inside the
+            # client library, minutes later and nowhere near its cause.
+            raise MimicBigQueryError(
+                f"{billing_project!r} is the placeholder from the README and the Colab "
+                "notebook, not a project id. Set MIMIC_BIGQUERY_PROJECT (or pass "
+                "--bq-project) to a Google Cloud project you own; BigQuery bills the "
+                "project that runs the query."
             )
         self.billing_project = billing_project
         self.clinical_dataset = clinical_dataset.rstrip(".")
