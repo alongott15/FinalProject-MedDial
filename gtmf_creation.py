@@ -270,8 +270,15 @@ def extract_gtmf(
     IMPORTANT: Respond with ONLY the JSON object, no other text.
 
     EVIDENCE SPANS:
+    - Every entity you record carries at least one evidence span. This applies
+      to all of them, not only the first list: Symptoms, Diagnoses,
+      Treatment_Options, Current_Medications, Discharge_Medications, and any
+      medications nested inside a treatment. A treatment or a drug with no
+      quote behind it cannot be used as a reference, however correct it looks.
+    - evidence.text must be copied verbatim from the note. For a medication,
+      quote the line the note lists it on; for a treatment, quote the sentence
+      that documents it.
     - Set every evidence.note_id to exactly {json.dumps(note_id)}.
-    - evidence.text must be copied verbatim from the note.
     - char_start and char_end are offsets into the note. Do not count
       characters carefully; the quoted text is what matters and the offsets
       are recomputed from it.
