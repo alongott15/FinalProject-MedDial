@@ -333,7 +333,7 @@ def extract_gtmf(
     # C2: the note is MIMIC-derived, so it is labelled restricted and only a
     # provider approved for that classification will accept it. A ProviderError
     # propagates: a model that failed to answer is not a note without content.
-    result = provider.complete(
+    completion = provider.complete(
         to_chat_messages([
             {"role": "system", "content": system_message},
             {"role": "user", "content": user_message},
@@ -341,9 +341,12 @@ def extract_gtmf(
         classification=DataClassification.RESTRICTED_CLINICAL,
         temperature=0.0,
         max_tokens=max_tokens,
-    ).text
+    )
+    result = completion.text
 
-    extraction = _first_json_object(aggressive_json_clean(result), note_id)
+    extraction = _first_json_object(
+        aggressive_json_clean(result), note_id, usage=_budget_report(completion, max_tokens)
+    )
     repaired = _repair_evidence_offsets(extraction, note_id, medical_text)
     if repaired:
         logger.info("Relocated %d evidence span(s) from their quoted text", repaired)
@@ -380,7 +383,39 @@ def extract_gtmf(
     return reference
 
 
-def _first_json_object(text: str, note_id: str) -> dict:
+def _budget_report(completion, max_tokens: int) -> str:
+    """Say whether the answer hit the budget, from what the server reported.
+
+    "Raise max_tokens, lower the reasoning budget, or widen the window" lists
+    three fixes and leaves the operator to guess between them, which across a
+    200-case run means re-running everything to test each. The server already
+    reports how many tokens the prompt and the answer used, so the guess is
+    unnecessary: an answer that stopped one token short of the cap was
+    truncated, and one that stopped well short was not, and no amount of extra
+    budget will change it.
+    """
+    meta = getattr(completion, "metadata", None)
+    prompt_tokens = getattr(meta, "prompt_tokens", 0) or 0
+    completion_tokens = getattr(meta, "completion_tokens", 0) or 0
+    if not completion_tokens:
+        return ""
+    report = (
+        f" The prompt used {prompt_tokens} tokens and the answer used "
+        f"{completion_tokens} of its {max_tokens}-token budget."
+    )
+    if completion_tokens >= max_tokens - 1:
+        return report + (
+            " It hit the budget, so it was cut off mid-JSON: raise --max-tokens"
+            " (and the serving window with it, if the two no longer fit)."
+        )
+    return report + (
+        " It stopped short of the budget, so it was not truncated and a larger"
+        " budget will not help -- the model ended the answer itself and what it"
+        " wrote does not parse."
+    )
+
+
+def _first_json_object(text: str, note_id: str, usage: str = "") -> dict:
     """The first balanced JSON object in a response, or raise.
 
     An empty or unbalanced result means the note was not read -- most often a
@@ -406,9 +441,7 @@ def _first_json_object(text: str, note_id: str) -> dict:
         raise ExtractionError(
             f"Note {note_id!r} produced no parseable extraction. Returning an "
             "empty reference here would record the note as read when it was "
-            "not. A truncated answer is the usual cause: raise max_tokens, "
-            "lower the reasoning budget, or widen the serving context so the "
-            "note and its answer both fit."
+            f"not.{usage}"
         )
     return data
 

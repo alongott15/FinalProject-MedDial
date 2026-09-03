@@ -101,8 +101,14 @@ def test_an_empty_but_parseable_extraction_is_reported(caplog) -> None:
     assert "no symptoms, diagnoses or treatments" in caplog.text
 
 
-def test_the_refusal_names_the_note_and_the_usual_cause() -> None:
-    """The operator needs to know which note, and what to change."""
+def test_the_refusal_names_the_note_and_what_the_budget_did() -> None:
+    """The operator needs to know which note, and what to change.
+
+    The message used to list three possible fixes -- raise max_tokens, lower
+    the reasoning budget, widen the window -- and leave the choice to the
+    reader. Across 200 cases that means re-running everything to test each
+    guess. The server reports the token counts, so the guess is unnecessary.
+    """
     provider = MockProvider(["{ truncated"])
 
     with pytest.raises(ExtractionError) as excinfo:
@@ -110,7 +116,20 @@ def test_the_refusal_names_the_note_and_the_usual_cause() -> None:
 
     message = str(excinfo.value)
     assert "case-42" in message
-    assert "max_tokens" in message
+    assert "stopped short of the budget" in message
+    assert "a larger budget will not help" in message
+
+
+def test_an_answer_that_hit_the_budget_says_to_raise_it() -> None:
+    """The other half of the same question, and the opposite advice."""
+    provider = MockProvider(["{ truncated"])
+
+    with pytest.raises(ExtractionError) as excinfo:
+        extract_gtmf(NOTE, provider, note_id="case-42", max_tokens=2)
+
+    message = str(excinfo.value)
+    assert "It hit the budget" in message
+    assert "raise --max-tokens" in message
 
 
 # -- evidence offsets are derived from the quote, not trusted ---------------
