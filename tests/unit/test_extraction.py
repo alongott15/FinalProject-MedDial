@@ -174,3 +174,106 @@ def test_repair_reports_how_many_spans_it_moved() -> None:
     }
 
     assert _repair_evidence_offsets(node, "s1", NOTE) == 2
+
+
+# -- the two failure modes a 200-case run actually produced ------------------
+
+
+WRAPPED_NOTE = (
+    "Discharge Medications:\n"
+    "1. Keflex 500 mg Capsule Sig: One (1) Capsule PO four times a\n"
+    "day for 10 days.\n"
+)
+
+
+def test_a_quote_the_note_hard_wraps_still_resolves() -> None:
+    """The single commonest reason a genuine quote failed to resolve.
+
+    MIMIC notes wrap mid-sentence. A model quoting across the wrap writes the
+    space rather than the newline, so an otherwise verbatim quote is absent
+    from the note by one character, and the entity is reported ungrounded.
+    """
+    payload = {
+        "Core_Fields": {
+            "Diagnoses": [],
+            "Treatment_Options": [],
+            "Symptoms": [
+                {
+                    "description": "cellulitis",
+                    "evidence": [
+                        {
+                            "note_id": "s1",
+                            "char_start": 0,
+                            "char_end": 1,
+                            "text": "Keflex 500 mg Capsule Sig: One (1) Capsule PO four times a day",
+                        }
+                    ],
+                }
+            ],
+        },
+        "Context_Fields": {},
+    }
+    provider = MockProvider([json.dumps(payload)])
+
+    reference = extract_gtmf(WRAPPED_NOTE, provider, note_id="s1")
+
+    span = reference.core.symptoms[0].evidence[0]
+    assert span.resolves_against(WRAPPED_NOTE)
+    assert "\n" in span.text, "the span carries the note's own wording, wrap included"
+    assert reference.evidence_issues({"s1": WRAPPED_NOTE}) == {}
+
+
+def test_a_fabricated_quote_is_still_refused_by_the_flexible_match() -> None:
+    """Whitespace tolerance must not become a licence to invent."""
+    payload = {
+        "Core_Fields": {
+            "Symptoms": [
+                {
+                    "description": "invented",
+                    "evidence": [
+                        {
+                            "note_id": "s1",
+                            "char_start": 0,
+                            "char_end": 5,
+                            "text": "Keflex 500 mg PO twice a day for 10 days",
+                        }
+                    ],
+                }
+            ],
+        },
+        "Context_Fields": {},
+    }
+    provider = MockProvider([json.dumps(payload)])
+
+    reference = extract_gtmf(WRAPPED_NOTE, provider, note_id="s1")
+
+    assert reference.evidence_issues({"s1": WRAPPED_NOTE}), "a quote not in the note must stay flagged"
+
+
+def test_a_null_optional_field_does_not_discard_the_extraction() -> None:
+    """30 of 92 failures in one run were a null in a field with no content.
+
+    A model that cannot fill an optional descriptive field writes null about as
+    often as it omits the key. Discarding the whole reference over that threw
+    away extractions that had already located dozens of evidence spans.
+    """
+    payload = {
+        "Core_Fields": {
+            "Treatment_Options": [
+                {"procedure": "laparoscopic cholecystectomy", "details": None,
+                 "treatment": None, "evidence": []}
+            ],
+            "Symptoms": [{"description": "sore throat", "onset": None, "evidence": []}],
+        },
+        "Context_Fields": {
+            "Discharge_Medications": [{"name": "Keflex", "purpose": None}],
+        },
+    }
+    provider = MockProvider([json.dumps(payload)])
+
+    reference = extract_gtmf(NOTE, provider, note_id="s1")
+
+    assert reference.core.treatments[0].procedure == "laparoscopic cholecystectomy"
+    assert reference.core.treatments[0].details == "not provided"
+    assert reference.core.symptoms[0].onset == "not provided"
+    assert reference.context.discharge_medications[0].purpose == "not provided"

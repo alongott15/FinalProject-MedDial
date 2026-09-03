@@ -221,19 +221,54 @@ def _repair_evidence_offsets(node, note_id: str, source_note: str) -> int:
             for span in value:
                 if not isinstance(span, dict):
                     continue
+                # Stamp the note even when the quote cannot be located, so an
+                # unresolved span is reported as the text mismatch it is rather
+                # than as a reference to a note nobody has heard of.
+                span["note_id"] = note_id
                 text = span.get("text")
                 if not isinstance(text, str) or not text:
                     continue
-                start = source_note.find(text)
-                if start < 0:
+                located = _locate_quote(text, source_note)
+                if located is None:
                     continue
-                span["note_id"] = note_id
+                start, end = located
                 span["char_start"] = start
-                span["char_end"] = start + len(text)
+                span["char_end"] = end
+                # The note's own wording, so the span resolves exactly. This
+                # differs from the model's quote only in whitespace.
+                span["text"] = source_note[start:end]
                 repaired += 1
         else:
             repaired += _repair_evidence_offsets(value, note_id, source_note)
     return repaired
+
+
+def _locate_quote(text: str, source_note: str) -> tuple[int, int] | None:
+    """Find ``text`` in the note, tolerating how the note wraps its lines.
+
+    An exact search is tried first. When that fails the words are matched with
+    any run of whitespace between them.
+
+    This is not a loosening of the fabrication check: a quote the note does not
+    contain still fails, because every word must still appear, in order, with
+    nothing but whitespace between them. What it fixes is the dominant reason a
+    *genuine* quote failed. MIMIC notes are hard-wrapped mid-sentence, and a
+    model quoting across a wrap writes the space rather than the newline, so
+
+        Keflex 500 mg Capsule Sig: One (1) Capsule PO four times a day
+
+    is absent from a note that reads ``...four times a\\nday``. On a 200-case
+    run that one character was behind most of the unresolved spans -- 10 to 30
+    per case, on cases that had otherwise extracted cleanly.
+    """
+    start = source_note.find(text)
+    if start >= 0:
+        return start, start + len(text)
+    words = text.split()
+    if not words:
+        return None
+    match = re.search(r"\s+".join(re.escape(word) for word in words), source_note)
+    return (match.start(), match.end()) if match else None
 
 
 def extract_gtmf(
@@ -275,9 +310,12 @@ def extract_gtmf(
       Treatment_Options, Current_Medications, Discharge_Medications, and any
       medications nested inside a treatment. A treatment or a drug with no
       quote behind it cannot be used as a reference, however correct it looks.
-    - evidence.text must be copied verbatim from the note. For a medication,
-      quote the line the note lists it on; for a treatment, quote the sentence
-      that documents it.
+    - evidence.text must be copied verbatim from the note.
+    - Quote the SHORTEST span that supports the entity -- normally three to
+      fifteen words. A span locates the claim; it does not reproduce it. Do not
+      quote a whole paragraph, a lab block, or a medication list.
+    - Leave any field you cannot fill out of the object entirely rather than
+      writing null.
     - Set every evidence.note_id to exactly {json.dumps(note_id)}.
     - char_start and char_end are offsets into the note. Do not count
       characters carefully; the quoted text is what matters and the offsets

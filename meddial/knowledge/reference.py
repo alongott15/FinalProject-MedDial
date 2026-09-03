@@ -15,10 +15,35 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-class EvidenceSpan(BaseModel):
+class _Model(BaseModel):
+    """Base for every model here: an explicit ``null`` means "not provided".
+
+    A model asked for an optional descriptive field it cannot fill answers
+    ``"details": null`` at least as often as it omits the key. Pydantic treats
+    those differently -- an absent key takes the default, ``None`` is a type
+    error -- and the whole extraction was discarded over a field carrying no
+    clinical content. In one 200-case run that lost 30 references, a third of
+    every failure, several of them after 40-odd evidence spans had already been
+    located.
+
+    No field in this module is optional, so ``None`` is never meaningful here.
+    Dropping it lets the default apply, which is what the model meant.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_means_absent(cls, data: object) -> object:
+        if isinstance(data, dict):
+            return {key: value for key, value in data.items() if value is not None}
+        return data
+
+
+class EvidenceSpan(_Model):
     """Where in a source note an extracted entity came from (KNOW-1)."""
 
     note_id: str
@@ -50,7 +75,7 @@ class EvidenceSpan(BaseModel):
         return self.validation_error(source_note) is None
 
 
-class _Evidenced(BaseModel):
+class _Evidenced(_Model):
     """Base for entities that must be traceable to a source note."""
 
     model_config = ConfigDict(populate_by_name=True)
@@ -91,7 +116,7 @@ class TreatmentOption(_Evidenced):
     medications: list[Medication] = Field(default_factory=list)
 
 
-class Core(BaseModel):
+class Core(_Model):
     model_config = ConfigDict(populate_by_name=True)
 
     symptoms: list[Symptom] = Field(default_factory=list, alias="Symptoms")
@@ -101,7 +126,7 @@ class Core(BaseModel):
     )
 
 
-class Demographics(BaseModel):
+class Demographics(_Model):
     model_config = ConfigDict(populate_by_name=True)
 
     date_of_birth: str = Field("not provided", alias="Date_of_Birth")
@@ -116,13 +141,13 @@ class Demographics(BaseModel):
     discharge_date: str = Field("not provided", alias="Discharge_Date")
 
 
-class MedicalHistory(BaseModel):
+class MedicalHistory(_Model):
     model_config = ConfigDict(populate_by_name=True)
 
     past_medical_history: str = Field("not provided", alias="Past_Medical_History")
 
 
-class Context(BaseModel):
+class Context(_Model):
     model_config = ConfigDict(populate_by_name=True)
 
     demographics: Demographics = Field(
@@ -140,13 +165,13 @@ class Context(BaseModel):
     )
 
 
-class Additional(BaseModel):
+class Additional(_Model):
     model_config = ConfigDict(populate_by_name=True)
 
     chief_complaint: str = Field("not provided", alias="Chief_Complaint")
 
 
-class StructuredClinicalReference(BaseModel):
+class StructuredClinicalReference(_Model):
     """The privileged, unmasked record for one admission."""
 
     model_config = ConfigDict(populate_by_name=True)
