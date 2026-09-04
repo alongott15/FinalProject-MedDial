@@ -30,9 +30,9 @@
       "quantisation": "Q4_K_M"
     },
     "judge": {
-      "id": "qwen3.5:32b",
+      "id": "llama3.3:70b",
       "digest": "UNPINNED:development",
-      "family": "qwen",
+      "family": "llama",
       "quantisation": "Q4_K_M"
     },
     "patient": {
