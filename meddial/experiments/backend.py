@@ -258,6 +258,7 @@ class _Session:
     calls: list[dict[str, Any]] = field(default_factory=list)
     generator: Any = None
     judge: Any = None
+    claim_extractor: Any = None
 
 
 class MedDialBackend:
@@ -273,6 +274,7 @@ class MedDialBackend:
         *,
         generator: LLMProvider,
         judge: LLMProvider,
+        claim_extractor: LLMProvider | None = None,
         policy_registry: PolicyRegistry | None = None,
         structural_config: StructuralConfig | None = None,
         generator_temperature: float = 0.6,
@@ -280,6 +282,12 @@ class MedDialBackend:
     ) -> None:
         self._generator = generator
         self._judge = judge
+        # Implementation Plan A.2 gives claim extraction its own model: it is
+        # the highest-volume path in the evaluator and it wants JSON reliability
+        # rather than world knowledge, which is a different thing to choose for
+        # than judging. It defaults to the judge so an existing caller is
+        # unaffected, but pointing it at a smaller, faster model is the intent.
+        self._claim_extractor = claim_extractor or judge
         self._policies = policy_registry or PolicyRegistry()
         self._structural_config = structural_config
         self._generator_temperature = generator_temperature
@@ -367,6 +375,14 @@ class MedDialBackend:
             role="judge",
             sink=session.calls,
             spec=_spec_for(config, "judge"),
+        )
+        # Its own role, so the attempt record shows which model read the
+        # transcript and which model judged it, even when they are the same one.
+        session.claim_extractor = RecordingProvider(
+            self._claim_extractor,
+            role="claim_extractor",
+            sink=session.calls,
+            spec=_spec_for(config, "extractor", "judge"),
         )
         return session
 
@@ -514,7 +530,7 @@ class MedDialBackend:
             # that failed to answer is a run failure, not an empty cell.
             try:
                 claims = extract_claims(
-                    turns, provider=session.judge, seed=request.seed
+                    turns, provider=session.claim_extractor, seed=request.seed
                 )
             except ClaimExtractionError as exc:
                 claims = None

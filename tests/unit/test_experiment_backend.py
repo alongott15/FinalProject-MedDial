@@ -336,3 +336,42 @@ def test_backend_case_reads_a_reference_given_as_a_model_or_a_mapping() -> None:
     )
 
     assert as_model.reference == as_mapping.reference
+
+
+# -- claim extraction is its own role ----------------------------------------
+
+
+def test_claim_extraction_uses_its_own_provider_when_one_is_given() -> None:
+    """Implementation Plan A.2 gives claim extraction its own model.
+
+    It is the highest-volume path in the evaluator and it wants JSON
+    reliability rather than world knowledge, which is a different thing to
+    select for than judging. The attempt record has to show which model read
+    the transcript, separately from the one that scored it.
+    """
+    judge = MockProvider()
+    claim_extractor = MockProvider()
+    backend = MedDialBackend(
+        generator=MockProvider([DIALOGUE_JSON] * 8),
+        judge=judge,
+        claim_extractor=claim_extractor,
+    )
+
+    session = backend._session(_request(_config()), VariantName.FULL_MEDDIAL)
+
+    # The wiring is the claim: the transcript reader is the provider handed
+    # in, not the judge that happens to sit beside it.
+    assert session.claim_extractor._inner is claim_extractor
+    assert session.judge._inner is judge
+    assert session.claim_extractor._role == "claim_extractor"
+
+
+def test_claim_extraction_falls_back_to_the_judge() -> None:
+    """An existing caller passing only generator and judge is unaffected."""
+    backend = MedDialBackend(
+        generator=MockProvider([DIALOGUE_JSON] * 8), judge=MockProvider()
+    )
+
+    session = backend._session(_request(_config()), VariantName.FULL_MEDDIAL)
+
+    assert session.claim_extractor._inner is session.judge._inner

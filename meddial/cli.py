@@ -582,6 +582,17 @@ def _run_parser() -> argparse.ArgumentParser:
     parser.add_argument("--generator-family", default="mistral")
     parser.add_argument("--judge", default=DEFAULT_JUDGE, help=f"[{DEFAULT_JUDGE}]")
     parser.add_argument("--judge-family", default="qwen")
+    parser.add_argument(
+        "--claim-extractor",
+        default=None,
+        help=(
+            "model that turns each transcript into claims [the judge]. "
+            "Implementation Plan A.2 gives this its own model: it is the "
+            "highest-volume path in the evaluator, and it wants JSON "
+            "reliability rather than world knowledge."
+        ),
+    )
+    parser.add_argument("--claim-extractor-family", default=None)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--quantisation", default="Q4_K_M")
     parser.add_argument(
@@ -623,6 +634,14 @@ def run_main(argv: list[str] | None = None) -> int:
             family=args.judge_family,
             quantisation=args.quantisation,
         )
+        claim_extractor = judge
+        if args.claim_extractor:
+            claim_extractor = _local_provider(
+                args.base_url,
+                args.claim_extractor,
+                family=args.claim_extractor_family or args.claim_extractor.split(":")[0],
+                quantisation=args.quantisation,
+            )
     except ProviderError as exc:
         raise SystemExit(f"Provider error: {exc}") from exc
 
@@ -639,7 +658,9 @@ def run_main(argv: list[str] | None = None) -> int:
         result = runner.run(
             config,
             cases,
-            MedDialBackend(generator=generator, judge=judge),
+            MedDialBackend(
+                generator=generator, judge=judge, claim_extractor=claim_extractor
+            ),
             requested_run_id=args.run_id,
             confirmatory=args.confirmatory,
         )
