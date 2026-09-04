@@ -18,7 +18,7 @@
   },
   "models": {
     "doctor": {
-      "id": "gemma4:27b",
+      "id": "gemma4:31b",
       "digest": "UNPINNED:development",
       "family": "gemma",
       "quantisation": "Q4_K_M"
@@ -36,14 +36,16 @@
       "quantisation": "Q4_K_M"
     },
     "patient": {
-      "id": "mistral-small3.2:24b",
+      "id": "gemma4:31b",
       "digest": "UNPINNED:development",
-      "family": "mistral",
+      "family": "gemma",
       "quantisation": "Q4_K_M"
     }
   },
   "prompt_versions": {
-    "doctor": "UNPINNED:development", "extraction": "UNPINNED:development", "patient": "UNPINNED:development"
+    "doctor": "UNPINNED:development",
+    "extraction": "UNPINNED:development",
+    "patient": "UNPINNED:development"
   },
   "frozen_at": null,
   "input_manifest_hash": "UNPINNED:development",

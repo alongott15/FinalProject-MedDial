@@ -30,14 +30,15 @@
       "quantisation": "Q4_K_M"
     },
     "dialogue": {
-      "id": "mistral-small3.2:24b",
+      "id": "gemma4:31b",
       "digest": "UNPINNED:development",
-      "family": "mistral",
+      "family": "gemma",
       "quantisation": "Q4_K_M"
     }
   },
   "prompt_versions": {
-    "dialogue": "UNPINNED:development", "extraction": "UNPINNED:development"
+    "dialogue": "UNPINNED:development",
+    "extraction": "UNPINNED:development"
   },
   "frozen_at": null,
   "input_manifest_hash": "UNPINNED:development",
