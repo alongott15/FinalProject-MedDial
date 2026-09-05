@@ -593,6 +593,30 @@ def _run_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--claim-extractor-family", default=None)
+    parser.add_argument(
+        "--reasoning-effort",
+        default="none",
+        help=(
+            "reasoning budget for every model in the run [none]. A reasoning "
+            "model spends its completion budget on reasoning tokens before it "
+            "emits any content, and those tokens are invisible in the returned "
+            "text while still being paid for -- so the turn arrives empty and "
+            "the attempt fails. meddial-scr has carried this flag since the "
+            "same failure hit extraction. Pass 'default' to restore the "
+            "server's setting."
+        ),
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=900.0,
+        help=(
+            "seconds to wait for one call [900]. The provider's 300s default is "
+            "a chat timeout; scoring reads a whole transcript, and because a "
+            "timeout is retried, one that is too short burns three of them per "
+            "attempt and produces nothing."
+        ),
+    )
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--quantisation", default="Q4_K_M")
     parser.add_argument(
@@ -611,6 +635,8 @@ def _run_parser() -> argparse.ArgumentParser:
 def run_main(argv: list[str] | None = None) -> int:
     args = _run_parser().parse_args(argv)
     check_output_location(args.out, allowed=args.allow_in_repo)
+    if args.reasoning_effort == "default":
+        args.reasoning_effort = None
 
     try:
         config = load_run_config(args.config)
@@ -622,17 +648,25 @@ def run_main(argv: list[str] | None = None) -> int:
     print(f"Cases: {len(cases)}")
 
     try:
+        # Every provider gets the same reasoning and timeout settings: a
+        # reasoning model in any role fails the same way, with an empty message
+        # and a budget already spent.
+        provider_settings = {
+            "quantisation": args.quantisation,
+            "reasoning_effort": args.reasoning_effort,
+            "timeout_s": args.timeout,
+        }
         generator = _local_provider(
             args.base_url,
             args.generator,
             family=args.generator_family,
-            quantisation=args.quantisation,
+            **provider_settings,
         )
         judge = _local_provider(
             args.base_url,
             args.judge,
             family=args.judge_family,
-            quantisation=args.quantisation,
+            **provider_settings,
         )
         claim_extractor = judge
         if args.claim_extractor:
@@ -640,7 +674,7 @@ def run_main(argv: list[str] | None = None) -> int:
                 args.base_url,
                 args.claim_extractor,
                 family=args.claim_extractor_family or args.claim_extractor.split(":")[0],
-                quantisation=args.quantisation,
+                **provider_settings,
             )
     except ProviderError as exc:
         raise SystemExit(f"Provider error: {exc}") from exc

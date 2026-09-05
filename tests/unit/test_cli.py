@@ -158,3 +158,37 @@ def test_tables_regenerates_every_output_from_the_records_a_run_wrote(
     assert {"scores.csv", "acceptance.csv", "cost.csv", "primary_metric.svg"} <= written
     assert "analysis_manifest.json" in written, "an analysis must say how it was made"
     assert "Read 1 attempt record" in capsys.readouterr().out
+
+
+# -- a reasoning model must not spend the turn on reasoning ------------------
+
+
+def test_run_disables_reasoning_by_default() -> None:
+    """gemma4:31b produced 1123 characters of reasoning and no content.
+
+    A reasoning model spends the completion budget before it emits anything,
+    and those tokens are invisible in the returned text while still being paid
+    for, so the turn arrives empty and the attempt fails. meddial-scr has
+    carried this flag since the same failure hit extraction; meddial-run did
+    not pass it at all, so the server's default applied.
+    """
+    from meddial.cli import _run_parser
+
+    args = _run_parser().parse_args(
+        ["--config", "c.json", "--cases", "cases.jsonl", "--out", "/tmp/out"]
+    )
+
+    assert args.reasoning_effort == "none"
+    assert args.timeout == 900.0
+
+
+def test_run_can_restore_the_servers_reasoning_setting() -> None:
+    """'default' is the escape hatch, spelled the way meddial-scr spells it."""
+    from meddial.cli import _run_parser
+
+    args = _run_parser().parse_args(
+        ["--config", "c.json", "--cases", "cases.jsonl", "--out", "/tmp/out",
+         "--reasoning-effort", "default"]
+    )
+
+    assert args.reasoning_effort == "default"
